@@ -2,7 +2,7 @@
 
 Das Plugin liest die lokalen Claude-Code-Sitzungsdateien und schickt **nur Zahlen und Metadaten** an deinen eigenen tokenlore-Server, nie Inhalte. Den Server gibt es im Repo [tokenlore/tokenlore-server](https://github.com/tokenlore/tokenlore-server).
 
-**Inhalt:** [Was wird gesendet?](#was-wird-gesendet) · [Voraussetzungen](#voraussetzungen) · [Installation](#installation) · [Benutzung](#benutzung) · [Ablage und Schlüssel](#ablage-und-schlüssel) · [Deinstallieren](#deinstallieren) · [Lizenz](#lizenz)
+**Inhalt:** [Was wird gesendet?](#was-wird-gesendet) · [Voraussetzungen](#voraussetzungen) · [Installation](#installation) · [Benutzung](#benutzung) · [Ablage und Schlüssel](#ablage-und-schlüssel) · [Deinstallieren](#deinstallieren) · [Lizenz](#lizenz) · [Änderungen](CHANGELOG.md)
 
 ## Was wird gesendet?
 
@@ -60,6 +60,8 @@ Das Plugin bringt die fertigen Programme mit (`bin/`, Prüfsummen in `bin/SHA256
 
 - **Automatisch:** in einer `claude`-Sitzung im Terminal `/plugin` → Reiter *Marketplaces* → *tokenlore* → *Enable auto-update*. Einmal pro Gerät; im Code-Tab der Desktop-App gibt es `/plugin` nicht. Claude Code holt neue Versionen dann kurz nach Sitzungsbeginn; aktiv werden sie mit `/reload-plugins` oder in der nächsten Sitzung.
 - **Von Hand:** `claude plugin marketplace update tokenlore`, dann `claude plugin update tokenlore@tokenlore`, danach `/reload-plugins`.
+
+Was sich in jeder Version ändert, steht in [CHANGELOG.md](CHANGELOG.md).
 
 ## Benutzung
 
