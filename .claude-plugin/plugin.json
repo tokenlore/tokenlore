@@ -1,0 +1,5 @@
+{
+  "name": "tokenlore",
+  "version": "0.4.0",
+  "description": "Liest die Nutzungszahlen deiner Claude-Code-Sitzungen (Tokens, Modelle, Werkzeuge, Zeiten – nie Inhalte) und schickt sie zur Auswertung an den tokenlore-Server, mit dem du das Gerät koppelst."
+}

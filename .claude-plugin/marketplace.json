@@ -1,0 +1,12 @@
+{
+  "name": "tokenlore",
+  "owner": { "name": "tokenlore" },
+  "plugins": [
+    {
+      "name": "tokenlore",
+      "source": ".",
+      "description": "Liest die Nutzungszahlen deiner Claude-Code-Sitzungen (Tokens, Modelle, Werkzeuge, Zeiten – nie Inhalte) und schickt sie zur Auswertung an den tokenlore-Server, mit dem du das Gerät koppelst.",
+      "version": "0.4.0"
+    }
+  ]
+}

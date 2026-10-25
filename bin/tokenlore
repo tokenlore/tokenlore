@@ -1,0 +1,48 @@
+#!/bin/sh
+# Starter: wählt das Programm für diese Plattform und reicht alle Argumente
+# unverändert durch. Läuft auch ohne Ausführungsbit (der Hook ruft ihn mit sh auf).
+
+os=$(uname -s 2>/dev/null)
+arch=$(uname -m 2>/dev/null)
+case "$os" in
+  MINGW*|MSYS*|CYGWIN*) os=windows; ext=.exe ;;
+  Linux) os=linux; ext= ;;
+  Darwin) os=darwin; ext= ;;
+  *) os=; ext= ;;
+esac
+case "$arch" in
+  x86_64|amd64) arch=amd64 ;;
+  aarch64|arm64) arch=arm64 ;;
+  *) arch= ;;
+esac
+
+# Sessionstart darf Claude Code nie stören: Fehler dort enden mit Exit 0.
+fail=1
+[ "${1:-}" = "session-start" ] && fail=0
+
+if [ -z "$os" ] || [ -z "$arch" ]; then
+  echo "tokenlore: Plattform wird nicht unterstützt ($(uname -s 2>/dev/null) $(uname -m 2>/dev/null))." >&2
+  exit "$fail"
+fi
+
+dir=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd)
+if [ -z "$dir" ]; then
+  echo "tokenlore: Ordner des Starters nicht ermittelbar" >&2
+  exit "$fail"
+fi
+bin="$dir/tokenlore-$os-$arch$ext"
+
+if [ ! -f "$bin" ]; then
+  echo "tokenlore: Programm nicht gefunden: $bin" >&2
+  exit "$fail"
+fi
+# Ausführungsbit geht beim Installieren evtl. verloren: einmal nachholen.
+if [ ! -x "$bin" ]; then
+  chmod +x "$bin" 2>/dev/null
+fi
+if [ ! -x "$bin" ]; then
+  echo "tokenlore: Programm nicht ausführbar: $bin" >&2
+  exit "$fail"
+fi
+
+exec "$bin" "$@"

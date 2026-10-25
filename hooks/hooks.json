@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/bin/tokenlore\" session-start",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
