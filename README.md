@@ -2,7 +2,7 @@
 
 Das Plugin liest die lokalen Claude-Code-Sitzungsdateien und schickt **nur Zahlen und Metadaten** an deinen eigenen tokenlore-Server, nie Inhalte. Den Server gibt es im Repo [tokenlore/tokenlore-server](https://github.com/tokenlore/tokenlore-server).
 
-**Inhalt:** [Was wird gesendet?](#was-wird-gesendet) · [Voraussetzungen](#voraussetzungen) · [Installation](#installation) · [Benutzung](#benutzung) · [Ablage und Schlüssel](#ablage-und-schlüssel) · [Deinstallieren](#deinstallieren)
+**Inhalt:** [Was wird gesendet?](#was-wird-gesendet) · [Voraussetzungen](#voraussetzungen) · [Installation](#installation) · [Benutzung](#benutzung) · [Ablage und Schlüssel](#ablage-und-schlüssel) · [Deinstallieren](#deinstallieren) · [Lizenz](#lizenz)
 
 ## Was wird gesendet?
 
@@ -113,3 +113,9 @@ Bei jedem Sitzungsstart merkt sich der Hook das angemeldete Konto und startet de
 1. `/tokenlore:disconnect` entfernt Schlüssel und Verbindung auf dem Gerät. Das Gerät danach auch auf dem Server sperren, sonst bleibt sein Schlüssel dort gültig.
 2. Plugin entfernen: `/plugin uninstall tokenlore@tokenlore`
 3. Datenverzeichnis und Cache-Ordner (siehe oben) löschen.
+
+## Lizenz
+
+MIT, siehe [LICENSE](LICENSE). Die Programme in `bin/` enthalten Bibliotheken anderer Lizenzen; deren Texte stehen in [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES).
+
+tokenlore ist kein Produkt von Anthropic und nicht mit Anthropic verbunden. „Claude“ und „Claude Code“ sind Marken von Anthropic.
