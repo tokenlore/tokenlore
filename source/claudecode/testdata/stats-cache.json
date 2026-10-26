@@ -1,0 +1,13 @@
+{
+  "version": 2,
+  "lastComputedDate": "2026-08-15",
+  "dailyActivity": [
+    {"date": "2026-08-14", "messageCount": 120, "sessionCount": 3, "toolCallCount": 40},
+    {"date": "2026-08-15", "messageCount": 80, "sessionCount": 2, "toolCallCount": 25}
+  ],
+  "dailyModelTokens": [
+    {"date": "2026-08-14", "tokensByModel": {"claude-opus-4-1": 150000, "<synthetic>": 5}},
+    {"date": "2026-08-15", "tokensByModel": {"claude-sonnet-4-5": 90000, "kaputt modell!": 1}}
+  ],
+  "modelUsage": {}
+}

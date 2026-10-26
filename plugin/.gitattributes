@@ -1,0 +1,6 @@
+# Gilt im öffentlichen Repo tokenlore/tokenlore: Starter und Prüfsummenliste immer mit LF auschecken,
+# auch unter Windows mit core.autocrlf=true (sonst scheitert sha256sum -c, und der Starter hätte CR).
+* text=auto eol=lf
+bin/tokenlore text eol=lf
+bin/SHA256SUMS text eol=lf
+bin/tokenlore-* binary
