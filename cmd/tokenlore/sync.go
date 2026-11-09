@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -13,13 +15,14 @@ import (
 	"github.com/tokenlore/tokenlore/client"
 	"github.com/tokenlore/tokenlore/deliver"
 	"github.com/tokenlore/tokenlore/secret"
+	"github.com/tokenlore/tokenlore/source/claudecode"
 	"github.com/tokenlore/tokenlore/state"
 )
 
 // lockDevice nimmt die gerätweite Sperre; Tests ersetzen sie, damit sie das echte Cache-Verzeichnis nicht anfassen.
 var lockDevice = deviceLock
 
-// backgroundCommand ist das Programm, das session-start im Hintergrund startet.
+// backgroundCommand ist das Programm, das session-start und session-end im Hintergrund starten.
 // Tests ersetzen es durch einen Hilfsprozess des Testprogramms.
 var backgroundCommand = func() (exe string, args []string) {
 	exe, err := os.Executable()
@@ -32,11 +35,13 @@ var backgroundCommand = func() (exe string, args []string) {
 }
 
 // runSync gleicht einmal mit dem Server ab. Mit --background schreibt es nichts nach stdout/stderr:
-// Es läuft abgekoppelt vom Sessionstart, das Ergebnis steht in status.json.
+// Es läuft abgekoppelt vom Hook, das Ergebnis steht in status.json. --ended nennt die Protokolldatei einer eben
+// beendeten Sitzung, deren letzte Anfragen sofort fertig sind.
 func runSync(args []string, stdout, stderr io.Writer, dataDir, configDir string) int {
 	fs := flag.NewFlagSet("sync", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	bg := fs.Bool("background", false, "still im Hintergrund abgleichen")
+	endedPath := fs.String("ended", "", "Protokolldatei einer beendeten Sitzung (Hook SessionEnd)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -68,7 +73,7 @@ func runSync(args []string, stdout, stderr io.Writer, dataDir, configDir string)
 		if err != nil {
 			stat = &state.Status{}
 		}
-		stat.LastAttempt, stat.LastError = time.Now(), msg
+		stat.LastAttempt, stat.LastError, stat.LastErrorOldDatabase = time.Now(), msg, false
 		_ = stat.Save(dataDir) // Status ist nur Anzeige
 		return 1
 	}
@@ -88,7 +93,26 @@ func runSync(args []string, stdout, stderr io.Writer, dataDir, configDir string)
 	// Der Fehlertext von secret.Load enthält den Schlüssel nie (nur Ablage, Zeitgrenze oder Prüfsumme).
 	key, err := secret.Load(dataDir, conn.KeyStore, conn.KeySum)
 	if err != nil {
-		return early(fmt.Sprintf("Geräteschlüssel nicht lesbar: %v – neu koppeln mit /tokenlore:connect", err))
+		code := early(fmt.Sprintf("Geräteschlüssel nicht lesbar: %v, bitte neu koppeln.", err))
+		fmt.Fprintln(stderr, deliver.RepairSteps(client.Clean(conn.ServerURL)))
+		return code
+	}
+	// Ohne passenden Signaturschlüssel geht nichts raus; einen neuen erzeugt erst das Koppeln.
+	st, err := state.Load(dataDir)
+	if err != nil {
+		return early(fmt.Sprintf("Merkzettel nicht lesbar: %v", err))
+	}
+	signKey, err := loadSignKey(dataDir, st)
+	if err != nil {
+		// Ist der Server älter als das Plugin, hilft Neukoppeln nicht: erst muss er aktualisiert werden.
+		if errors.Is(err, errSignKeyMissing) && serverTooOld(conn) {
+			return early(deliver.MsgServerTooOld)
+		}
+		code := early(err.Error())
+		if errors.Is(err, errSignKeyMissing) {
+			fmt.Fprintln(stderr, deliver.RepairSteps(client.Clean(conn.ServerURL)))
+		}
+		return code
 	}
 	base, err := client.ParseServerURL(conn.ServerURL)
 	if err != nil {
@@ -98,23 +122,59 @@ func runSync(args []string, stdout, stderr io.Writer, dataDir, configDir string)
 	if err != nil {
 		return early(err.Error())
 	}
+	// Ein Protokollname außerhalb von projects/ gilt nicht; die Anfrage kommt dann nach den übrigen Regeln.
+	var ended []string
+	if rel, ok := claudecode.EndedRel(configDir, *endedPath); ok {
+		ended = []string{rel}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), syncTimeout)
 	defer cancel()
-	rep, err := deliver.Run(ctx, deliver.Deps{DataDir: dataDir, ConfigDir: configDir, Version: version, Key: key, Sender: c})
+	rep, err := deliver.Run(ctx, deliver.Deps{DataDir: dataDir, ConfigDir: configDir, Version: version, Key: key, Sender: c, Identity: conn.Identity, Machine: machineHash(), SignKey: signKey, Ended: ended})
 	if err != nil {
 		fmt.Fprintln(stderr, err)
+		// Abgelehnter Schlüssel, fremder Rechner oder übernommener Signaturschlüssel: Die Schritte zum Neukoppeln gleich dazu.
+		if stat, serr := state.LoadStatus(dataDir); serr == nil && stat.LastError != "" &&
+			(stat.LastError == stat.KeyRejected || stat.LastError == deliver.MsgOtherDevice || stat.LastError == deliver.MsgSignKeyTaken) {
+			fmt.Fprintln(stderr, deliver.RepairSteps(client.Clean(conn.ServerURL)))
+		}
 		return 1
 	}
-	if rep.NothingNew {
-		fmt.Fprintln(stdout, "Nichts Neues.")
-		return 0
-	}
-	fmt.Fprintf(stdout, "Abgleich fertig: %s.", requestsInParts(rep.Requests, rep.Parts))
-	if rep.Warnings > 0 {
-		fmt.Fprintf(stdout, " %d %s (Texte: /tokenlore:status --warnings).", rep.Warnings, plural(rep.Warnings, "Warnung", "Warnungen"))
-	}
-	fmt.Fprintln(stdout)
+	printSyncResult(stdout, rep, "", "Abgleich fertig: ")
 	return 0
+}
+
+// printSyncResult schreibt das Ergebnis eines Abgleichs wie sync: „Nichts Neues.“ oder die Zahl der Anfragen, dazu die
+// Hinweise. Ein Paket nur mit der Kontenliste zählt als nichts Neues. lead steht vor „Nichts Neues.“, doneLead vor der
+// Zahl; connect nutzt dieselbe Ausgabe für den ersten Abgleich.
+func printSyncResult(w io.Writer, rep deliver.Report, lead, doneLead string) {
+	if rep.NothingNew || (rep.Requests == 0 && rep.Days == 0) {
+		fmt.Fprint(w, lead+"Nichts Neues.")
+		if rep.Damaged > 0 {
+			fmt.Fprintf(w, " %d beschädigte Archiv%s ausgesondert.", rep.Damaged, plural(rep.Damaged, "zeile", "zeilen"))
+		}
+		fmt.Fprintln(w)
+		if rep.Foreign > 0 {
+			fmt.Fprintf(w, "Hinweis: %s\n", deliver.ForeignMessage(rep.Foreign))
+		}
+		return
+	}
+	fmt.Fprintf(w, "%s%s.", doneLead, requestsInParts(rep.Requests, rep.Parts))
+	if rep.Days > 0 {
+		fmt.Fprintf(w, " %d %s aus der Vorgeschichte.", rep.Days, plural(rep.Days, "Tag", "Tage"))
+	}
+	if rep.Damaged > 0 {
+		fmt.Fprintf(w, " %d beschädigte Archiv%s ausgesondert.", rep.Damaged, plural(rep.Damaged, "zeile", "zeilen"))
+	}
+	if rep.Warnings > 0 {
+		fmt.Fprintf(w, " %d %s (Texte: /tokenlore:status --warnings).", rep.Warnings, plural(rep.Warnings, "Warnung", "Warnungen"))
+	}
+	fmt.Fprintln(w)
+	if rep.Foreign > 0 {
+		fmt.Fprintf(w, "Hinweis: %s\n", deliver.ForeignMessage(rep.Foreign))
+	}
+	for _, n := range deliver.Notices(&state.Status{LastKnown: rep.Known, LastElsewhere: rep.Elsewhere, LastLegacyRejected: rep.LegacyRejected}) {
+		fmt.Fprintf(w, "Hinweis: %s\n", n)
+	}
 }
 
 // connectionClient baut den Client für die gespeicherte Verbindung und senkt die Vertrauensstufe nie still:
@@ -131,4 +191,22 @@ func connectionClient(base *url.URL, conn *state.Connection) (*client.Client, er
 		return nil, err
 	}
 	return newClient(base, []byte(conn.CAPEM), clientTimeout)
+}
+
+// serverTooOld meldet, ob der gekoppelte Server GET /api/plugin/info nicht kennt (404), also älter als dieses Plugin
+// ist. Jeder andere Ausgang, auch ein Netzfehler, zählt nicht als zu alt.
+func serverTooOld(conn *state.Connection) bool {
+	base, err := client.ParseServerURL(conn.ServerURL)
+	if err != nil {
+		return false
+	}
+	c, err := connectionClient(base, conn)
+	if err != nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), infoTimeout)
+	defer cancel()
+	_, err = c.Info(ctx)
+	var rej *client.RejectedError
+	return errors.As(err, &rej) && rej.Status == http.StatusNotFound
 }

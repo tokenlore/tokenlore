@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -70,5 +71,48 @@ func TestPluginSyncOffersNoBackground(t *testing.T) {
 	b, _ := os.ReadFile(filepath.Join("..", "..", "plugin", "commands", "sync.md"))
 	if h := hintRe.FindStringSubmatch(strings.ReplaceAll(string(b), "\r\n", "\n")); h == nil || h[1] != `""` {
 		t.Fatalf("argument-hint %q", h)
+	}
+}
+
+// connect.md stellt keine Rückfrage mehr: Ein anderer Rechner wird immer ein eigenes Gerät.
+func TestPluginConnectHasNoMoveOrSecondComputer(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "plugin", "commands", "connect.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	for _, bad := range []string{"Rückfrage", "Umzug", "--umzug", "--zweiter-rechner", "--resend-legacy"} {
+		if strings.Contains(s, bad) {
+			t.Errorf("connect.md nennt %q", bad)
+		}
+	}
+	if h := hintRe.FindStringSubmatch(strings.ReplaceAll(s, "\r\n", "\n")); h == nil || !strings.Contains(h[1], "[--name <gerätename>]") {
+		t.Errorf("argument-hint %q", h)
+	}
+}
+
+// Beide Hooks rufen über den Starter ihren Unterbefehl auf: Sessionstart und Sitzungsende.
+func TestPluginHooks(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "plugin", "hooks", "hooks.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var h struct {
+		Hooks map[string][]struct {
+			Hooks []struct{ Type, Command string }
+		}
+	}
+	if err := json.Unmarshal(b, &h); err != nil {
+		t.Fatal(err)
+	}
+	for event, sub := range map[string]string{"SessionStart": "session-start", "SessionEnd": "session-end"} {
+		groups := h.Hooks[event]
+		if len(groups) != 1 || len(groups[0].Hooks) != 1 {
+			t.Fatalf("%s: %+v", event, groups)
+		}
+		hk := groups[0].Hooks[0]
+		if want := `sh "${CLAUDE_PLUGIN_ROOT}/bin/tokenlore" ` + sub; hk.Type != "command" || hk.Command != want {
+			t.Fatalf("%s: %+v, want %q", event, hk, want)
+		}
 	}
 }

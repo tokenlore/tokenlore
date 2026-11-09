@@ -32,5 +32,5 @@ Claude Code gehören zu Anthropic.
 ## Was tokenlore bewusst nicht leistet
 
 Die Grenzen, die das [README](README.md) offen nennt, sind keine Lücken, sondern beschriebene Eigenschaften. Beispiele:
-Programme desselben Benutzers können den Geräteschlüssel lesen, und wer den Server betreibt, sieht alle gesendeten Zahlen
+Programme desselben Benutzers können Geräte- und Signaturschlüssel lesen, und wer den Server betreibt, sieht alle gesendeten Zahlen
 und Metadaten.

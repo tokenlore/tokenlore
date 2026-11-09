@@ -20,13 +20,14 @@ var version = "dev"
 const usage = `Aufruf: tokenlore <befehl>
 
 Befehle:
-  connect <url> <code> [--ca <fingerabdruck>] [--name <name>] [--resend-legacy]
+  connect <url> <code> [--ca <fingerabdruck>] [--name <name>]
                   koppelt dieses Gerät mit dem Server
   disconnect      trennt die Verbindung (Gerät danach auf dem Server sperren)
   sync            gleicht jetzt mit dem Server ab
   status [--next] [--warnings]
                   zeigt Verbindung, letzten Abgleich und offene Daten
-  session-start   beim Sessionstart aufrufen (Hook), merkt sich das Konto und gleicht im Hintergrund ab
+  session-start   beim Sessionstart aufrufen (Hook), merkt sich das Konto der Sitzung, meldet Hinweise und gleicht im Hintergrund ab
+  session-end     beim Sitzungsende aufrufen (Hook), gleicht im Hintergrund ab, höchstens alle 5 Minuten
   scan            liest neue Nutzungszahlen ein
   email           zeigt oder setzt, ob die E-Mail-Adresse mitgesendet wird
   version         zeigt die Version
@@ -62,9 +63,19 @@ func run(args []string) int {
 		if err != nil {
 			return 0 // der Sessionstart darf nie gestört werden
 		}
-		_ = runSessionStart(os.Stdin, dataDir, claudecode.ClaudeJSONPath(cfg))
+		_ = runSessionStart(os.Stdin, dataDir, cfg, time.Now())
+		// Meldungen aus dem letzten Abgleich und zur Kennung; der neue Abgleich unten meldet sich erst beim nächsten Start.
+		writeSessionNotice(os.Stdout, dataDir, cfg)
 		// Der Abgleich läuft abgekoppelt: Claude Code wartet nie auf das Netz.
 		startBackgroundSync(dataDir)
+		return 0
+	case "session-end":
+		time.AfterFunc(sessionEndBrake, func() { os.Exit(0) })
+		dataDir, _, err := dirs()
+		if err != nil {
+			return 0 // das Sitzungsende darf nie gestört werden
+		}
+		runSessionEnd(os.Stdin, dataDir, time.Now())
 		return 0
 	case "connect", "disconnect":
 		dataDir, cfg, err := dirs()

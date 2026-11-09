@@ -23,6 +23,9 @@ const (
 
 var ErrNotFound = errors.New("Geräteschlüssel nicht gefunden")
 
+// errAbsent meldet intern einen fehlenden Eintrag oder eine fehlende Datei; Load und LoadSignKey übersetzen ihn.
+var errAbsent = errors.New("nicht vorhanden")
+
 var (
 	errBadKey      = errors.New("Geräteschlüssel hat ein ungültiges Format")
 	errKeyMismatch = errors.New("Geräteschlüssel passt nicht zur Verbindung")
@@ -30,13 +33,15 @@ var (
 
 // keyringUser bindet den Eintrag an das Datenverzeichnis, damit eine zweite Instanz (anderes
 // TOKENLORE_DATA_DIR) den Schlüssel der ersten weder überschreibt noch löscht.
-func keyringUser(dataDir string) string {
+func keyringUser(dataDir string) string { return keyringUserFor("device-key:", dataDir) }
+
+func keyringUserFor(prefix, dataDir string) string {
 	abs, err := filepath.Abs(dataDir)
 	if err != nil {
 		abs = dataDir
 	}
 	sum := sha256.Sum256([]byte(filepath.Clean(abs)))
-	return "device-key:" + hex.EncodeToString(sum[:])[:16]
+	return prefix + hex.EncodeToString(sum[:])[:16]
 }
 
 func sumOf(key string) string {
@@ -60,11 +65,11 @@ func Save(dataDir, key string) (kind, keySum string, err error) {
 		if err := keyringSet(keyringUser(dataDir), key); err == nil {
 			// Eine ältere Datei würde den Schlüssel offen herumliegen lassen. Scheitert das Löschen, bleibt
 			// der Schlüssel trotzdem im Schlüsselspeicher registriert (nie verwaisen); Remove räumt beide Ablagen.
-			_ = removeFile(dataDir)
+			_ = removeFile(dataDir, fileName)
 			return KindKeyring, keySum, nil
 		}
 	}
-	if err := saveFile(dataDir, key); err != nil {
+	if err := saveFile(dataDir, fileName, key); err != nil {
 		return "", "", fmt.Errorf("Geräteschlüssel speichern: %w", err)
 	}
 	if useKeyring {
@@ -84,9 +89,12 @@ func Load(dataDir, kind, keySum string) (string, error) {
 	case KindKeyring:
 		key, err = keyringGet(keyringUser(dataDir))
 	case KindFile:
-		key, err = loadFile(dataDir)
+		key, err = loadFile(dataDir, fileName)
 	default:
 		return "", fmt.Errorf("unbekannte Schlüsselablage %q", kind)
+	}
+	if errors.Is(err, errAbsent) {
+		return "", ErrNotFound
 	}
 	if err != nil {
 		return "", err
@@ -108,7 +116,7 @@ func Remove(dataDir, kind string) error {
 		return fmt.Errorf("unbekannte Schlüsselablage %q", kind)
 	}
 	krErr := keyringDelete(keyringUser(dataDir))
-	fileErr := removeFile(dataDir)
+	fileErr := removeFile(dataDir, fileName)
 	if fileErr != nil {
 		return fileErr
 	}

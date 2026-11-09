@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/hex"
@@ -16,6 +17,8 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -29,23 +32,34 @@ import (
 	"github.com/tokenlore/tokenlore/state"
 )
 
-const (
-	testDeviceKey = "tl_dk_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
-	testSalt      = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-)
+const testDeviceKey = "tl_dk_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
 
-// fakeServer bildet /api/plugin/ca, /pair und /ingest nach.
+// fakeServer bildet /api/plugin/ca, /info, /pair und /ingest nach.
 type fakeServer struct {
 	srv         *httptest.Server
+	serverID    string // server_id der Info-Antwort; jeder Testserver bekommt eine eigene
+	infoCode    int    // 0 = 200 mit serverID
+	infoBody    string // Rumpf zu infoCode
+	pairCode    int    // 0 = 200; sonst dieser Status mit pairBody
+	pairBody    string
+	deviceID    int64 // device_id der Pair-Antwort; 0 = 7
 	root        *testpki.CA
-	pairFP      string // ca_fingerprint der Pair-Antwort; leer = echter Fingerabdruck
-	pairEmptyFP bool   // Pair-Antwort mit leerem ca_fingerprint (Server ohne eigene CA)
+	pairFP      string   // ca_fingerprint der Pair-Antwort; leer = echter Fingerabdruck
+	pairEmptyFP bool     // Pair-Antwort mit leerem ca_fingerprint (Server ohne eigene CA)
+	repaired    bool     // Pair-Antwort mit "repaired": true
+	signRefused []string // sign_keys_refused der Pair-Antwort
+	// verifySign: /ingest prüft wie der Server jede Signatur gegen die Schlüssel aus dem letzten Pair-Aufruf ohne
+	// signRefused und weist sonst mit 400 und reason sign_key_unknown ab.
+	verifySign  bool
+	pairBodies  []string
 	noCA        bool   // /api/plugin/ca antwortet 404 (Server ohne eigene CA)
 	ingestCode  int    // 0 = 200
+	ingestBody  string // Rumpf zu ingestCode, z. B. der Grund eines 401
 	failAfter   int    // >0: jedes Paket nach den ersten failAfter angenommenen bekommt 500
 	pairCalls   atomic.Int32
 	caCalls     atomic.Int32
-	onIngest    func() // wird bei jedem Paket vor der Antwort aufgerufen
+	onIngest    func()         // wird bei jedem Paket vor der Antwort aufgerufen
+	ingestExtra map[string]any // zusätzliche Felder der Antwort auf jedes Paket, unter mu
 	mu          sync.Mutex
 	batches     []protocol.Batch
 	rawBodies   []string
@@ -59,9 +73,17 @@ func newFakeServer(t *testing.T) *fakeServer {
 // newFakeServerHost stellt das Blatt-Zertifikat auf host aus; ein anderer Name als 127.0.0.1 erzeugt einen Hostnamen-Fehler.
 func newFakeServerHost(t *testing.T, host string) *fakeServer {
 	t.Helper()
-	f := &fakeServer{root: testpki.NewRoot(t)}
+	f := &fakeServer{root: testpki.NewRoot(t), serverID: randomHex(t, 32)}
 	inter := f.root.Intermediate(t)
 	mux := http.NewServeMux()
+	mux.HandleFunc("/api/plugin/info", func(w http.ResponseWriter, r *http.Request) {
+		if f.infoCode != 0 {
+			w.WriteHeader(f.infoCode)
+			io.WriteString(w, f.infoBody)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"server_id": f.serverID, "min_plugin_version": "0.1.0"})
+	})
 	mux.HandleFunc("/api/plugin/ca", func(w http.ResponseWriter, r *http.Request) {
 		f.caCalls.Add(1)
 		if f.noCA {
@@ -72,6 +94,10 @@ func newFakeServerHost(t *testing.T, host string) *fakeServer {
 	})
 	mux.HandleFunc("/api/plugin/pair", func(w http.ResponseWriter, r *http.Request) {
 		f.pairCalls.Add(1)
+		body, _ := io.ReadAll(r.Body)
+		f.mu.Lock()
+		f.pairBodies = append(f.pairBodies, string(body))
+		f.mu.Unlock()
 		fp := f.pairFP
 		if fp == "" {
 			fp = f.fingerprint()
@@ -79,8 +105,29 @@ func newFakeServerHost(t *testing.T, host string) *fakeServer {
 		if f.pairEmptyFP {
 			fp = ""
 		}
+		if f.pairCode != 0 {
+			w.WriteHeader(f.pairCode)
+			io.WriteString(w, f.pairBody)
+			return
+		}
+		// Besitznachweis wie der Server: Signatur über Vorsatz, server_id und Code mit dem gemeldeten Schlüssel, sonst 400.
+		var pr struct {
+			Code  string `json:"code"`
+			Pub   string `json:"sign_public_key"`
+			Proof string `json:"sign_public_key_proof"`
+		}
+		if json.Unmarshal(body, &pr) != nil || !protocol.VerifyPairProof(pr.Pub, f.serverID, pr.Code, pr.Proof) {
+			w.WriteHeader(http.StatusBadRequest)
+			io.WriteString(w, `{"error":"Besitznachweis des Signaturschlüssels fehlt oder passt nicht","path":"sign_public_key_proof"}`)
+			return
+		}
+		id := f.deviceID
+		if id == 0 {
+			id = 7
+		}
 		json.NewEncoder(w).Encode(map[string]any{
-			"device_id": 7, "device_key": testDeviceKey, "project_salt": testSalt, "ca_fingerprint": fp,
+			"device_id": id, "device_key": testDeviceKey, "ca_fingerprint": fp, "repaired": f.repaired,
+			"sign_keys_refused": f.signRefused,
 		})
 	})
 	mux.HandleFunc("/api/plugin/ingest", func(w http.ResponseWriter, r *http.Request) {
@@ -90,6 +137,7 @@ func newFakeServerHost(t *testing.T, host string) *fakeServer {
 		}
 		if f.ingestCode != 0 {
 			w.WriteHeader(f.ingestCode)
+			io.WriteString(w, f.ingestBody)
 			return
 		}
 		if f.onIngest != nil {
@@ -99,6 +147,14 @@ func newFakeServerHost(t *testing.T, host string) *fakeServer {
 		var b protocol.Batch
 		json.Unmarshal(body, &b)
 		f.mu.Lock()
+		if f.verifySign {
+			if path := f.unknownSignPath(b); path != "" {
+				f.mu.Unlock()
+				w.WriteHeader(http.StatusBadRequest)
+				io.WriteString(w, `{"error":"Signatur passt zu keinem Schlüssel des Geräts","path":"`+path+`","reason":"sign_key_unknown"}`)
+				return
+			}
+		}
 		if f.failAfter > 0 && len(f.batches) >= f.failAfter {
 			f.mu.Unlock()
 			w.WriteHeader(http.StatusInternalServerError)
@@ -106,8 +162,12 @@ func newFakeServerHost(t *testing.T, host string) *fakeServer {
 		}
 		f.batches = append(f.batches, b)
 		f.rawBodies = append(f.rawBodies, string(body))
+		resp := map[string]any{"requests": len(b.Requests), "sessions": len(b.Sessions), "accounts": len(b.Accounts)}
+		for k, v := range f.ingestExtra {
+			resp[k] = v
+		}
 		f.mu.Unlock()
-		json.NewEncoder(w).Encode(map[string]any{"requests": len(b.Requests), "sessions": len(b.Sessions), "accounts": len(b.Accounts)})
+		json.NewEncoder(w).Encode(resp)
 	})
 	srv := httptest.NewUnstartedServer(mux)
 	srv.TLS = &tls.Config{Certificates: []tls.Certificate{inter.Leaf(t, host)}}
@@ -116,6 +176,16 @@ func newFakeServerHost(t *testing.T, host string) *fakeServer {
 	t.Cleanup(srv.Close)
 	f.srv = srv
 	return f
+}
+
+// randomHex liefert n zufällige Byte als Hex, klein.
+func randomHex(t *testing.T, n int) string {
+	t.Helper()
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		t.Fatal(err)
+	}
+	return hex.EncodeToString(b)
 }
 
 func (f *fakeServer) fingerprint() string { return client.Fingerprint(f.root.DER()) }
@@ -128,6 +198,35 @@ func (f *fakeServer) ingested() []protocol.Batch {
 
 // connectEnv legt Claude-Testdaten (Sitzung und Altbestand) und ein leeres Datenverzeichnis an.
 // Der Schlüssel landet immer in der Datei, nie im echten Schlüsselspeicher.
+// unknownSignPath ist der Pfad der ersten Hülle in b, deren Signatur zu keinem Schlüssel des Geräts passt (Schlüssel
+// aus dem letzten Pair-Aufruf ohne signRefused), sonst leer. Aufruf unter mu.
+func (f *fakeServer) unknownSignPath(b protocol.Batch) string {
+	var keys []string
+	if n := len(f.pairBodies); n > 0 {
+		var pr struct {
+			Pub  string   `json:"sign_public_key"`
+			Prev []string `json:"sign_public_keys_previous"`
+		}
+		json.Unmarshal([]byte(f.pairBodies[n-1]), &pr)
+		for _, k := range append([]string{pr.Pub}, pr.Prev...) {
+			if !slices.Contains(f.signRefused, k) {
+				keys = append(keys, k)
+			}
+		}
+	}
+	for _, l := range []struct {
+		name string
+		list []protocol.Envelope
+	}{{"requests", b.Requests}, {"legacy_days", b.LegacyDays}} {
+		for i, e := range l.list {
+			if !slices.ContainsFunc(keys, func(k string) bool { return protocol.VerifyLine(k, []byte(e.Z), e.S) }) {
+				return fmt.Sprintf("%s[%d].s", l.name, i)
+			}
+		}
+	}
+	return ""
+}
+
 func connectEnv(t *testing.T) (cfg, data string) {
 	t.Helper()
 	cfg = filepath.Join(t.TempDir(), "claude")
@@ -144,6 +243,7 @@ func connectEnv(t *testing.T) (cfg, data string) {
 		}
 		os.WriteFile(dst, b, 0o600)
 	}
+	restFile(t, filepath.Join(p, "s1.jsonl"))
 	t.Setenv("CLAUDE_CONFIG_DIR", cfg)
 	t.Setenv("TOKENLORE_DATA_DIR", data)
 	t.Setenv("TOKENLORE_SECRET_STORE", "file")
@@ -157,12 +257,37 @@ func connect(t *testing.T, data, cfg string, args ...string) (int, string) {
 	return code, out.String()
 }
 
+// assertNothingStored prüft, dass keine Kopplung gespeichert ist. Der Signaturschlüssel entsteht schon vor dem Pair-Aufruf
+// und bleibt bei einem Fehler danach liegen (er gehört zum Rechner); im Merkzettel darf dann nur er stehen.
 func assertNothingStored(t *testing.T, data string) {
 	t.Helper()
-	for _, n := range []string{"connection.json", "device.key", "state.json"} {
+	for _, n := range []string{"connection.json", "device.key"} {
 		if _, err := os.Stat(filepath.Join(data, n)); !os.IsNotExist(err) {
 			t.Fatalf("%s wurde gespeichert", n)
 		}
+	}
+	b, err := os.ReadFile(filepath.Join(data, "state.json"))
+	if os.IsNotExist(err) {
+		return
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatal(err)
+	}
+	for k := range m {
+		switch k {
+		case "sign_public_key", "sign_public_keys_previous", "sign_key_store",
+			"files", "email_mode": // Grundfelder eines leeren Merkzettels
+		default:
+			t.Fatalf("Merkzettel mit %s gespeichert", k)
+		}
+	}
+	st, _ := state.Load(data)
+	if len(st.Files) != 0 || st.Identity != nil {
+		t.Fatal("Merkzettel mit Kopplungsstand gespeichert")
 	}
 }
 
@@ -339,6 +464,43 @@ func TestConnectRejectsBadName(t *testing.T) {
 	}
 }
 
+// device_name_explicit geht nur mit --name (und dann als true) mit; ohne --name behält der Server beim Neukoppeln
+// den bisherigen Namen.
+func TestConnectSendsNameExplicitOnlyWithName(t *testing.T) {
+	for _, tc := range []struct {
+		label string
+		args  []string
+		want  bool
+	}{
+		{"ohne --name", nil, false},
+		{"--name leer", []string{"--name", ""}, false},
+		{"mit --name", []string{"--name", "neu"}, true},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			cfg, data := connectEnv(t)
+			f := newFakeServer(t)
+			args := append([]string{f.srv.URL, "123456", "--ca", f.fingerprint()}, tc.args...)
+			if code, out := connect(t, data, cfg, args...); code != 0 {
+				t.Fatalf("Exit %d: %s", code, out)
+			}
+			var body map[string]any
+			if err := json.Unmarshal([]byte(f.pairBodies[0]), &body); err != nil {
+				t.Fatal(err)
+			}
+			v, has := body["device_name_explicit"]
+			if has != tc.want || (has && v != true) {
+				t.Fatalf("device_name_explicit: %v %v in %s", v, has, f.pairBodies[0])
+			}
+			if !tc.want {
+				h, _ := os.Hostname()
+				if body["device_name"] != truncateRunes(h, protocol.MaxDeviceName) {
+					t.Fatalf("Name ohne --name nicht der Rechnername: %v", body["device_name"])
+				}
+			}
+		})
+	}
+}
+
 func TestConnectSuccess(t *testing.T) {
 	cfg, data := connectEnv(t)
 	f := newFakeServer(t)
@@ -348,7 +510,8 @@ func TestConnectSuccess(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("Exit %d: %s", code, out)
 	}
-	if out != "Verbunden mit "+f.srv.URL+" als „Testgerät“ (Gerät 7).\nErster Abgleich: 1 Anfrage in 1 Paket.\n" {
+	// Die Zeile zum ersten Abgleich gleicht der von sync (Fund M16).
+	if out != "Verbunden mit "+f.srv.URL+" als „Testgerät“ (Gerät 7).\nErster Abgleich: 1 Anfrage in 1 Paket. 2 Tage aus der Vorgeschichte. 1 Warnung (Texte: /tokenlore:status --warnings).\n" {
 		t.Fatalf("Ausgabe:\n%s", out)
 	}
 	conn, ok, err := state.LoadConnection(data)
@@ -364,8 +527,11 @@ func TestConnectSuccess(t *testing.T) {
 		t.Fatalf("Schlüssel: %v", err)
 	}
 	st, _ := state.Load(data)
-	if st.Salt != testSalt || !st.Delivered {
-		t.Fatalf("Merkzettel: Salt %q Delivered %v", st.Salt, st.Delivered)
+	if st.Identity == nil {
+		t.Fatal("Merkzettel ohne Kennung")
+	}
+	if _, err := os.Stat(filepath.Join(state.ArchiveDir(data, st.Identity.ID), "geliefert.json")); err != nil {
+		t.Fatalf("Merker „geliefert“ fehlt: %v", err)
 	}
 	if len(f.ingested()) < 1 {
 		t.Fatal("kein Paket geliefert")
@@ -388,8 +554,9 @@ func assertKeyAbsent(t *testing.T, data, out string) {
 	}
 }
 
-// writeMarkedState legt einen Merkzettel an, in dem s1.jsonl schon vollständig gelesen ist.
-func writeMarkedState(t *testing.T, cfg, data string, legacyDone, delivered bool) {
+// writeMarkedState legt einen Merkzettel an, in dem s1.jsonl schon vollständig gelesen ist, wie ihn ein Plugin ohne
+// Archiv hinterlässt, samt Feldern der früheren Lieferung und einem Salz.
+func writeMarkedState(t *testing.T, cfg, data string) {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join(cfg, "projects", "P", "s1.jsonl"))
 	if err != nil {
@@ -399,17 +566,31 @@ func writeMarkedState(t *testing.T, cfg, data string, legacyDone, delivered bool
 	sum := sha256.Sum256(b[:n])
 	st, _ := state.Load(data)
 	st.Files["projects/P/s1.jsonl"] = state.FileMark{Offset: int64(len(b)), End: int64(len(b)), HeadLen: n, HeadSum: hex.EncodeToString(sum[:])}
-	st.LegacyDone, st.Delivered = legacyDone, delivered
-	st.Salt = strings.Repeat("f", 64)
-	st.AccountsSum = "alt"
 	if err := st.Save(data); err != nil {
+		t.Fatal(err)
+	}
+	// Ein Merkzettel aus der Zeit mit Projekt-Kennung trägt noch ein Salz.
+	raw, err := os.ReadFile(filepath.Join(data, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	m["salt"] = strings.Repeat("f", 64)
+	m["delivered"], m["legacy_sum"], m["accounts_sum"] = true, strings.Repeat("c", 64), "alt"
+	if raw, err = json.Marshal(m); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(data, "state.json"), raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func hasLegacy(bs []protocol.Batch) bool {
 	for _, b := range bs {
-		if len(b.LegacyModel) > 0 || len(b.LegacyActivity) > 0 {
+		if len(b.LegacyDays) > 0 {
 			return true
 		}
 	}
@@ -424,9 +605,11 @@ func requestCount(bs []protocol.Batch) int {
 	return n
 }
 
+// Ein Merkzettel aus der Zeit ohne Archiv: Beim ersten Archivieren gelten seine Lesestände nicht, alles Vorhandene
+// kommt ins Archiv und geht an den Server.
 func TestConnectFirstTimeResetsMarks(t *testing.T) {
 	cfg, data := connectEnv(t)
-	writeMarkedState(t, cfg, data, true, false)
+	writeMarkedState(t, cfg, data)
 	f := newFakeServer(t)
 	if code, out := connect(t, data, cfg, f.srv.URL, "123456", "--ca", f.fingerprint(), "--name", "x"); code != 0 {
 		t.Fatalf("Exit %d: %s", code, out)
@@ -435,30 +618,35 @@ func TestConnectFirstTimeResetsMarks(t *testing.T) {
 	if !hasLegacy(got) || requestCount(got) == 0 {
 		t.Fatalf("erster Abgleich ohne Altbestand oder Anfragen: %d Anfragen", requestCount(got))
 	}
-	st, _ := state.Load(data)
-	if st.Salt != testSalt {
-		t.Fatal("Salz nicht ersetzt")
+	// Das Salz aus dem alten Merkzettel bleibt nicht stehen.
+	if raw, _ := os.ReadFile(filepath.Join(data, "state.json")); strings.Contains(string(raw), `"salt"`) {
+		t.Fatalf("Salz noch im Merkzettel: %s", raw)
 	}
 }
 
-func TestReconnectKeepsLegacyDone(t *testing.T) {
+// Nach jedem Koppeln geht das ganze Archiv mit der Vorgeschichte erneut, jede Zeile einmal: connect setzt nur den
+// Merker „geliefert“ zurück, die Lesestände bleiben. Der Server zählt nichts doppelt.
+func TestReconnectSendsLegacyAgain(t *testing.T) {
 	cfg, data := connectEnv(t)
-	writeMarkedState(t, cfg, data, true, true)
 	f := newFakeServer(t)
 	if code, out := connect(t, data, cfg, f.srv.URL, "123456", "--ca", f.fingerprint(), "--name", "x"); code != 0 {
 		t.Fatalf("Exit %d: %s", code, out)
 	}
-	got := f.ingested()
-	if hasLegacy(got) {
-		t.Fatal("Altbestand nach Neu-Kopplung erneut gesendet")
+	first := f.ingested()
+	before, _ := state.Load(data)
+	code, out := connect(t, data, cfg, f.srv.URL, "123456", "--ca", f.fingerprint(), "--name", "x")
+	if code != 0 {
+		t.Fatalf("Exit %d: %s", code, out)
 	}
-	for _, raw := range f.rawBodies {
-		if strings.Contains(raw, "legacy_model") || strings.Contains(raw, "legacy_activity") {
-			t.Fatal("Paket enthält Altbestand")
-		}
+	got := f.ingested()[len(first):]
+	if !hasLegacy(got) || requestCount(got) != requestCount(first) {
+		t.Fatalf("Neu-Kopplung: Altbestand %v, %d Anfragen (vorher %d)", hasLegacy(got), requestCount(got), requestCount(first))
 	}
-	if requestCount(got) == 0 {
-		t.Fatal("Anfragen nicht erneut gesendet")
+	if strings.Contains(out, "Altbestand") || strings.Contains(out, "resend-legacy") {
+		t.Fatalf("Ausgabe mit altem Hinweis:\n%s", out)
+	}
+	if after, _ := state.Load(data); !reflect.DeepEqual(before.Files, after.Files) {
+		t.Fatalf("Lesestände verändert: %v → %v", before.Files, after.Files)
 	}
 }
 
@@ -512,8 +700,11 @@ func TestDisconnect(t *testing.T) {
 		t.Fatal("device.key noch da")
 	}
 	st, _ := state.Load(data)
-	if st.Salt != testSalt || len(st.Files) == 0 {
+	if len(st.Files) == 0 || st.Identity == nil {
 		t.Fatal("Merkzettel darf beim Trennen bleiben")
+	}
+	if _, err := os.Stat(filepath.Join(state.ArchiveDir(data, st.Identity.ID), "geliefert.json")); err != nil {
+		t.Fatalf("Merker „geliefert“ beim Trennen verändert: %v", err)
 	}
 }
 
@@ -525,10 +716,11 @@ func failConnSave(t *testing.T) {
 	t.Cleanup(func() { saveConnection = old })
 }
 
-// Stirbt connect zwischen Schlüssel und Verbindung, darf nie ein altes Salz mit neuer Verbindung zusammenkommen.
-func TestConnectConnSaveFailureLeavesNoStaleSalt(t *testing.T) {
+// Stirbt connect zwischen Schlüssel und Verbindung, bleibt das Gerät ungekoppelt: keine Verbindung. Die Lesestände
+// bleiben; was gelesen ist, steht im Archiv.
+func TestConnectConnSaveFailureLeavesNotPaired(t *testing.T) {
 	cfg, data := connectEnv(t)
-	writeMarkedState(t, cfg, data, true, true)
+	writeMarkedState(t, cfg, data)
 	f := newFakeServer(t)
 	failConnSave(t)
 	code, out := connect(t, data, cfg, f.srv.URL, "123456", "--ca", f.fingerprint(), "--name", "x")
@@ -536,8 +728,8 @@ func TestConnectConnSaveFailureLeavesNoStaleSalt(t *testing.T) {
 		t.Fatalf("Exit %d: %s", code, out)
 	}
 	st, _ := state.Load(data)
-	if st.Salt != "" || len(st.Files) != 0 || st.AccountsSum != "" {
-		t.Fatalf("Merkzettel mit altem Stand: Salt %q, %d Lesestände", st.Salt, len(st.Files))
+	if len(st.Files) != 1 {
+		t.Fatalf("Lesestände verändert: %d", len(st.Files))
 	}
 	for _, n := range []string{"connection.json", "device.key"} {
 		if _, err := os.Stat(filepath.Join(data, n)); !os.IsNotExist(err) {
@@ -661,7 +853,8 @@ func TestConnectPrintsConnectedBeforeFirstSync(t *testing.T) {
 	if !strings.Contains(before, "Verbunden mit "+f.srv.URL) {
 		t.Fatalf("beim ersten Paket noch nicht ausgegeben: %q", before)
 	}
-	if !strings.HasSuffix(out.String(), "Erster Abgleich: 1 Anfrage in 1 Paket.\n") {
+	// Die Zusammenfassung ist dieselbe Zeile wie bei sync, also mit Vorgeschichte und Warnungen (Fund M16).
+	if !strings.Contains(out.String(), "\nErster Abgleich: 1 Anfrage in 1 Paket. 2 Tage aus der Vorgeschichte.") {
 		t.Fatalf("Ausgabe:\n%s", out.String())
 	}
 }
@@ -677,11 +870,12 @@ func writeManyRequests(t *testing.T, cfg string, n int) {
 	if err := os.WriteFile(filepath.Join(cfg, "projects", "P", "s1.jsonl"), b.Bytes(), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	restFile(t, filepath.Join(cfg, "projects", "P", "s1.jsonl"))
 }
 
-// F1: Erst-Abgleich scheitert bei Paket 2, nachdem Paket 1 mit dem Altbestand angenommen war. Eine Neu-Kopplung
-// darf den Altbestand nicht noch einmal schicken, sonst zählt der Server ihn unter der neuen Geräte-ID doppelt.
-func TestReconnectAfterPartialFirstSyncSendsNoLegacy(t *testing.T) {
+// Erst-Abgleich scheitert bei Paket 2, nachdem Paket 1 mit dem Altbestand angenommen war. Die Neu-Kopplung mit
+// einem anderen Server schickt den ganzen Altbestand dorthin.
+func TestReconnectAfterPartialFirstSyncSendsLegacyAgain(t *testing.T) {
 	cfg, data := connectEnv(t)
 	writeManyRequests(t, cfg, 4500)
 	f := newFakeServer(t)
@@ -699,41 +893,23 @@ func TestReconnectAfterPartialFirstSyncSendsNoLegacy(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("Neu-Kopplung: Exit %d: %s", code, out)
 	}
-	if !strings.Contains(out, "Altbestand wurde schon an einen Server geliefert und wird nicht erneut gesendet (neuer oder geleerter Server: --resend-legacy).") {
-		t.Fatalf("Ausgabe ohne Hinweis auf den Altbestand:\n%s", out)
-	}
 	got := g.ingested()
-	if hasLegacy(got) || requestCount(got) != 4500 {
+	if !hasLegacy(got) || requestCount(got) != 4500 {
 		t.Fatalf("Neu-Kopplung: Altbestand %v, %d Anfragen", hasLegacy(got), requestCount(got))
-	}
-	for _, raw := range g.rawBodies {
-		if strings.Contains(raw, "legacy_model") || strings.Contains(raw, "legacy_activity") {
-			t.Fatal("Paket enthält Altbestand")
-		}
 	}
 }
 
-// F3: Für einen neuen oder geleerten Server lässt sich der Altbestand ausdrücklich erneut senden.
-func TestConnectResendLegacy(t *testing.T) {
+// --resend-legacy gibt es nicht mehr: Der Altbestand geht nach jedem Koppeln von selbst.
+func TestConnectResendLegacyIsUnknown(t *testing.T) {
 	cfg, data := connectEnv(t)
-	writeMarkedState(t, cfg, data, true, true)
-	st, _ := state.Load(data)
-	st.LegacySent = true
-	st.Save(data)
 	f := newFakeServer(t)
 	code, out := connect(t, data, cfg, f.srv.URL, "123456", "--ca", f.fingerprint(), "--name", "x", "--resend-legacy")
-	if code != 0 {
+	if code != 2 || !strings.Contains(out, "Unbekannte Option --resend-legacy") {
 		t.Fatalf("Exit %d: %s", code, out)
 	}
-	if !hasLegacy(f.ingested()) {
-		t.Fatal("Altbestand trotz --resend-legacy nicht gesendet")
-	}
-	if strings.Contains(out, "wird nicht erneut gesendet") {
-		t.Fatalf("Ausgabe:\n%s", out)
-	}
-	st, _ = state.Load(data)
-	if !st.LegacyDone || !st.LegacySent {
-		t.Fatalf("nach Lieferung: LegacyDone %v LegacySent %v", st.LegacyDone, st.LegacySent)
+	assertNothingStored(t, data)
+	if f.pairCalls.Load() != 0 {
+		t.Fatal("Pair aufgerufen")
 	}
 }
 
@@ -799,5 +975,17 @@ func TestConnectNoHintWithoutServerCAOrWithCA(t *testing.T) {
 	g := newFakeServer(t)
 	if code, out := connect(t, data, cfg, g.srv.URL, "123456", "--ca", g.fingerprint(), "--name", "x"); code != 0 || strings.Contains(out, "Hinweis:") {
 		t.Fatalf("mit --ca: Exit %d: %s", code, out)
+	}
+}
+
+// Neu gekoppelt mit anders geschriebener Adresse desselben Servers: kein Hinweis auf ein altes Gerät.
+func TestSameServerIgnoresSpelling(t *testing.T) {
+	for _, b := range []string{"https://x.example", "https://X.example/", "https://x.example:443"} {
+		if !sameServer("https://x.example", b) {
+			t.Errorf("%q gilt nicht als derselbe Server", b)
+		}
+	}
+	if sameServer("https://x.example", "https://y.example") || sameServer("https://x.example", "https://x.example:8443") {
+		t.Error("verschiedene Server gelten als gleich")
 	}
 }

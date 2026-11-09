@@ -33,3 +33,32 @@ func TestStatusMissingIsEmpty(t *testing.T) {
 		t.Fatalf("s=%v err=%v", s, err)
 	}
 }
+
+func TestStatusAddNewFields(t *testing.T) {
+	s := &Status{}
+	s.AddNewFields(nil)
+	if s.NewFields != nil {
+		t.Fatalf("leer: %q", s.NewFields)
+	}
+	s.AddNewFields([]string{"neu", "alt"})
+	s.AddNewFields([]string{"alt", "mitte"})
+	if fmt.Sprint(s.NewFields) != "[alt mitte neu]" {
+		t.Fatalf("Namen %q", s.NewFields)
+	}
+	var many []string
+	for i := 0; i < MaxNewFields+5; i++ {
+		many = append(many, fmt.Sprintf("f%02d", i))
+	}
+	s.AddNewFields(many)
+	if len(s.NewFields) != MaxNewFields || s.NewFields[0] != "alt" {
+		t.Fatalf("%d Namen, erster %q", len(s.NewFields), s.NewFields[0])
+	}
+	dir := t.TempDir()
+	if err := s.Save(dir); err != nil {
+		t.Fatal(err)
+	}
+	back, err := LoadStatus(dir)
+	if err != nil || len(back.NewFields) != MaxNewFields {
+		t.Fatalf("gespeichert %d, %v", len(back.NewFields), err)
+	}
+}

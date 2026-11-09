@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/tokenlore/tokenlore/protocol"
 )
 
 func fixtureLines(t *testing.T, name string) [][]byte {
@@ -51,7 +53,7 @@ func TestParseAggregatesOneRequest(t *testing.T) {
 	}
 	var got []string
 	for _, k := range order {
-		r, ok := aggs[k].toRequest(berlin(t), false)
+		r, ok := toCounted(aggs[k], berlin(t), false)
 		if !ok {
 			continue
 		}
@@ -73,13 +75,28 @@ func TestParseAggregatesOneRequest(t *testing.T) {
 		if r.TS.Location() != time.UTC || !r.TS.Equal(time.Date(2026, 10, 23, 21, 30, 0, 0, time.UTC)) {
 			t.Errorf("TS %v", r.TS)
 		}
-		if !reflect.DeepEqual(r.Extra, map[string]any{"service_tier": "standard"}) {
-			t.Errorf("Extra: %v", r.Extra)
+		if r.Usage["service_tier"] != "standard" {
+			t.Errorf("usage: %v", r.Usage)
 		}
 	}
 	if len(got) != 1 {
 		t.Fatalf("Anfragen %v, want genau msg_A", got)
 	}
+}
+
+// counted ist eine Inhaltszeile mit den daraus gelesenen Zählwerten.
+type counted struct {
+	protocol.RequestLine
+	protocol.Counts
+}
+
+func toCounted(a *reqAgg, loc *time.Location, subagent bool) (counted, bool) {
+	l, ok := a.toLine(loc, subagent)
+	if !ok {
+		return counted{}, false
+	}
+	c, err := protocol.UsageCounts(l.Usage)
+	return counted{l, c}, err == nil
 }
 
 func TestSyntheticIgnored(t *testing.T) {
@@ -90,7 +107,7 @@ func TestSyntheticIgnored(t *testing.T) {
 	}
 	a := &reqAgg{}
 	a.add(l)
-	if _, ok := a.toRequest(time.UTC, false); ok {
+	if _, ok := toCounted(a, time.UTC, false); ok {
 		t.Fatal("<synthetic> darf keine Anfrage ergeben")
 	}
 }
@@ -117,18 +134,19 @@ func TestNoContentRetained(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := fmt.Sprintf("%+v %+v", l, *l.Usage)
+	s := fmt.Sprintf("%+v %+v", l, l.Usage)
 	if strings.Contains(strings.ReplaceAll(s, "GEHEIM-nicht", ""), "GEHEIM") {
 		t.Fatalf("Inhalt im Parser-Ergebnis: %s", s)
 	}
 }
 
-func TestExtraLimits(t *testing.T) {
+// usage geht als ganzer Block mit: alle flachen Felder, auch Objekte und Listen, nicht nur 16 wie früher extra.
+func TestUsageKeepsAllFields(t *testing.T) {
 	var fields []string
 	for i := 0; i < 20; i++ {
 		fields = append(fields, fmt.Sprintf(`"f%02d":%d`, i, i))
 	}
-	fields = append(fields, `"lang":"`+strings.Repeat("y", 100)+`"`, `"obj":{"a":1}`, `"arr":[1]`)
+	fields = append(fields, `"obj":{"a":1}`, `"arr":[1]`)
 	b := []byte(`{"type":"assistant","sessionId":"s","requestId":"r","timestamp":"2026-10-23T21:30:00Z","message":{"id":"m","model":"x","content":[],"usage":{"input_tokens":1,` + strings.Join(fields, ",") + `}}}`)
 	l, err := parseLine(b)
 	if err != nil {
@@ -136,32 +154,25 @@ func TestExtraLimits(t *testing.T) {
 	}
 	a := &reqAgg{}
 	a.add(l)
-	r, ok := a.toRequest(time.UTC, false)
+	r, ok := toCounted(a, time.UTC, false)
 	if !ok {
 		t.Fatal("keine Anfrage")
 	}
-	if len(r.Extra) != 16 {
-		t.Fatalf("Extra hat %d Felder, want 16", len(r.Extra))
+	if len(r.Usage) != 23 {
+		t.Fatalf("usage hat %d Felder, want 23", len(r.Usage))
 	}
-	if _, ok := r.Extra["obj"]; ok {
-		t.Error("Objekt in Extra")
-	}
-	if r.Extra["f00"] != float64(0) {
-		t.Errorf("f00 = %v", r.Extra["f00"])
-	}
-	// alphabetisch: f00..f15 kommen vor "lang"
-	if _, ok := r.Extra["lang"]; ok {
-		t.Error("lang hätte nach f00..f15 wegfallen müssen")
+	if _, ok := r.Usage["obj"].(map[string]any); !ok {
+		t.Errorf("Objekt fehlt: %v", r.Usage["obj"])
 	}
 }
 
-func TestExtraStringTruncated(t *testing.T) {
+func TestUsageStringTruncated(t *testing.T) {
 	b := []byte(`{"type":"assistant","sessionId":"s","requestId":"r","timestamp":"2026-10-23T21:30:00Z","message":{"id":"m","model":"x","content":[],"usage":{"input_tokens":1,"lang":"` + strings.Repeat("ü", 100) + `"}}}`)
 	l, _ := parseLine(b)
 	a := &reqAgg{}
 	a.add(l)
-	r, _ := a.toRequest(time.UTC, false)
-	if s, _ := r.Extra["lang"].(string); len([]rune(s)) != 64 {
+	r, _ := toCounted(a, time.UTC, false)
+	if s, _ := r.Usage["lang"].(string); len([]rune(s)) != 64 {
 		t.Fatalf("lang hat %d Zeichen, want 64", len([]rune(s)))
 	}
 }
@@ -179,7 +190,7 @@ func TestStreamingLinesTakeFinalValues(t *testing.T) {
 		}
 		a.add(l)
 	}
-	r, _ := a.toRequest(time.UTC, false)
+	r, _ := toCounted(a, time.UTC, false)
 	if r.Output != 260 || r.CacheRead != 20480 || r.StopReason != "tool_use" {
 		t.Fatalf("got %+v", r)
 	}

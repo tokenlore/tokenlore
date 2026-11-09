@@ -49,16 +49,16 @@ func TestScanJSON(t *testing.T) {
 	if code := runScan([]string{"--json"}, &out, data, cfg); code != 0 {
 		t.Fatalf("Exit %d", code)
 	}
-	var parts []protocol.Batch
-	if err := json.Unmarshal(out.Bytes(), &parts); err != nil {
+	var lines []protocol.RequestLine
+	if err := json.Unmarshal(out.Bytes(), &lines); err != nil {
 		t.Fatalf("JSON: %v\n%s", err, out.String())
 	}
-	if len(parts) != 1 || parts[0].V != protocol.Version || len(parts[0].Requests) != 1 || parts[0].Device.OS == "" {
-		t.Fatalf("Pakete %+v", parts)
+	if len(lines) != 1 || lines[0].Kind != protocol.KindRequest || lines[0].MessageID != "msg_A" {
+		t.Fatalf("Zeilen %+v", lines)
 	}
 }
 
-// scan zeigt nur an; den Merkzettel speichert allein der Abgleich nach erfolgreicher Lieferung.
+// scan zeigt nur an; Archiv und Merkzettel schreibt allein der Abgleich.
 func TestScanHasNoCommitFlag(t *testing.T) {
 	cfg, data := scanEnv(t)
 	var out bytes.Buffer
@@ -69,23 +69,26 @@ func TestScanHasNoCommitFlag(t *testing.T) {
 	if code := runScan([]string{"--summary"}, &out, data, cfg); code != 0 {
 		t.Fatalf("Exit %d: %s", code, out.String())
 	}
-	if _, err := os.Stat(filepath.Join(data, "state.json")); !os.IsNotExist(err) {
-		t.Fatal("scan --summary hat state.json geschrieben")
+	for _, n := range []string{"state.json", "archiv"} {
+		if _, err := os.Stat(filepath.Join(data, n)); !os.IsNotExist(err) {
+			t.Fatalf("scan --summary hat %s geschrieben", n)
+		}
 	}
 }
 
-func TestSummaryTakesMaxOfDuplicates(t *testing.T) {
-	b := protocol.Batch{Requests: []protocol.Request{
-		{MessageID: "m", RequestID: "r", Model: "x", Output: 10, CacheRead: 0},
-		{MessageID: "m", RequestID: "r", Model: "x", Output: 7, CacheRead: 5},
-	}}
+// Wie im Archiv zählt eine Anfrage einmal, mit der zuerst gelesenen Zeile; spätere Kopien ändern nichts.
+func TestSummaryCountsDuplicatesOnce(t *testing.T) {
+	line := func(out string) protocol.RequestLine {
+		return protocol.RequestLine{MessageID: "m", RequestID: "r", SessionID: "s", Model: "x",
+			Usage: map[string]any{"output_tokens": json.Number(out), "cache_read_input_tokens": json.Number("5")}}
+	}
 	var out bytes.Buffer
-	printSummary(&out, b, 1, 0)
+	printSummary(&out, []protocol.RequestLine{line("10"), line("7")}, 0)
 	if !strings.Contains(out.String(), "Anfragen gesamt: 1") {
 		t.Fatalf("%s", out.String())
 	}
-	fields := strings.Fields(strings.Split(strings.TrimSpace(out.String()), "\n")[7])
-	if fields[0] != "x" || fields[3] != "10" || fields[5] != "5" {
-		t.Fatalf("Zeile %v, want Output 10 und CacheRead 5", fields)
+	fields := strings.Fields(strings.Split(strings.TrimSpace(out.String()), "\n")[4])
+	if fields[0] != "x" || fields[1] != "1" || fields[3] != "10" || fields[5] != "5" {
+		t.Fatalf("Zeile %v, want 1 Anfrage, Output 10 und CacheRead 5", fields)
 	}
 }

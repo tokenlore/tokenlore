@@ -22,6 +22,8 @@ type Connection struct {
 	KeyStore      string    `json:"key_store"` // "keyring" oder "file"
 	KeySum        string    `json:"key_sum"`   // hex sha256 des Geräteschlüssels, prüft Load
 	ConnectedAt   time.Time `json:"connected_at"`
+	Identity      string    `json:"identity,omitempty"`  // Kennung aus tokenlore-id, mit der gekoppelt wurde
+	ServerID      string    `json:"server_id,omitempty"` // server_id aus GET /api/plugin/info; bleibt bei einem Umzug gleich
 }
 
 // LoadConnection liest die Verbindung; fehlt sie, ist ok=false und kein Fehler.

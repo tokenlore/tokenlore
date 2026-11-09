@@ -5,17 +5,17 @@ package protocol
 import "time"
 
 // Version ist die Protokollversion, die jede Lieferung trägt.
-const Version = 1
+const Version = 2
 
-// Batch ist ein Lieferpaket.
+// Batch ist ein Lieferpaket (protocol/doc.md, „Batch“). Anfragen und Vorgeschichte-Tage stehen als signierte Hüllen
+// darin, genau so, wie sie im Archiv stehen.
 type Batch struct {
-	V              int                 `json:"v"`
-	Device         DeviceInfo          `json:"device"`
-	Accounts       []Account           `json:"accounts,omitempty"`
-	Sessions       []Session           `json:"sessions,omitempty"`
-	Requests       []Request           `json:"requests,omitempty"`
-	LegacyModel    []LegacyModelDay    `json:"legacy_model,omitempty"`
-	LegacyActivity []LegacyActivityDay `json:"legacy_activity,omitempty"`
+	V          int        `json:"v"`
+	Device     DeviceInfo `json:"device"`
+	Accounts   []Account  `json:"accounts,omitempty"`
+	Sessions   []Session  `json:"sessions,omitempty"`
+	Requests   []Envelope `json:"requests,omitempty"`
+	LegacyDays []Envelope `json:"legacy_days,omitempty"`
 }
 
 // DeviceInfo beschreibt das liefernde Gerät. Den Gerätenamen vergibt der Nutzer beim Koppeln.
@@ -43,47 +43,36 @@ type Account struct {
 // Session ist eine Claude-Code-Sitzung.
 type Session struct {
 	SessionID string `json:"session_id"`
-	ProjectID string `json:"project_id,omitempty"` // HMAC des Projektordnernamens, nie der Name selbst
 	CCVersion string `json:"cc_version,omitempty"`
 	AccountID string `json:"account_id,omitempty"`
 }
 
-// Request ist eine API-Anfrage, eindeutig über (RequestID, MessageID).
-// Sie darf mehrfach gesendet werden; der Server zählt sie einmal.
-type Request struct {
-	RequestID    string         `json:"request_id"`
-	MessageID    string         `json:"message_id"`
-	SessionID    string         `json:"session_id"`
-	TS           time.Time      `json:"ts"` // immer UTC
-	UTCOffsetMin int            `json:"utc_offset_min"`
-	Model        string         `json:"model"`
-	Input        int64          `json:"input"`
-	Output       int64          `json:"output"`
-	CacheCreate  int64          `json:"cache_create"`
-	CacheRead    int64          `json:"cache_read"`
-	Cache1h      int64          `json:"cache_1h"`
-	Cache5m      int64          `json:"cache_5m"`
-	Thinking     int64          `json:"thinking"`
-	WebSearch    int            `json:"web_search"`
-	WebFetch     int            `json:"web_fetch"`
-	StopReason   string         `json:"stop_reason,omitempty"`
-	Subagent     bool           `json:"subagent"`
-	Tools        map[string]int `json:"tools,omitempty"`
-	AccountID    string         `json:"account_id,omitempty"`
-	Extra        map[string]any `json:"extra,omitempty"` // nur float64 oder string
-}
+// Werte für das Feld kind einer Inhaltszeile.
+const (
+	KindRequest = "request"
+	KindDay     = "day"
+)
 
-// LegacyModelDay ist ein Tageswert aus dem Altbestand (stats-cache.json).
-type LegacyModelDay struct {
-	Date   string `json:"date"` // "2006-01-02"
-	Model  string `json:"model"`
-	Tokens int64  `json:"tokens"`
-}
-
-// LegacyActivityDay ist ein Tageswert der Aktivität aus dem Altbestand.
-type LegacyActivityDay struct {
-	Date      string `json:"date"`
-	Messages  int    `json:"messages"`
-	Sessions  int    `json:"sessions"`
-	ToolCalls int    `json:"tool_calls"`
+// RequestLine ist die Inhaltszeile einer Anfrage im Archiv (protocol/doc.md, „Inhaltszeile: Anfrage“). Sie enthält
+// nur die Felder dieser festen Liste; optionale Felder fehlen ganz, wenn das Protokoll den Wert nicht hat.
+// Usage ist der ganze Block message.usage, mit SanitizeUsage in die Grenzen gebracht; Zahlen sind json.Number.
+type RequestLine struct {
+	Kind           string         `json:"kind"`
+	RequestID      string         `json:"request_id"`
+	MessageID      string         `json:"message_id"`
+	SessionID      string         `json:"session_id"`
+	UUID           string         `json:"uuid,omitempty"`
+	ParentUUID     string         `json:"parent_uuid,omitempty"`
+	TS             time.Time      `json:"ts"` // immer UTC
+	UTCOffsetMin   int            `json:"utc_offset_min"`
+	Model          string         `json:"model"`
+	RequestedModel string         `json:"requested_model,omitempty"`
+	Effort         string         `json:"effort,omitempty"`
+	Entrypoint     string         `json:"entrypoint,omitempty"`
+	CCVersion      string         `json:"cc_version,omitempty"`
+	StopReason     string         `json:"stop_reason,omitempty"`
+	Subagent       bool           `json:"subagent"`
+	Tools          map[string]int `json:"tools,omitempty"`
+	AccountID      string         `json:"account_id,omitempty"`
+	Usage          map[string]any `json:"usage"`
 }

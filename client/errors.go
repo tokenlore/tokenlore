@@ -3,11 +3,14 @@ package client
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/tokenlore/tokenlore/protocol"
 )
 
 var (
@@ -15,14 +18,50 @@ var (
 	ErrUnauthorized = errors.New("Server lehnt den Geräteschlüssel ab")
 	// ErrBadCode: Der Kopplungscode ist ungültig, abgelaufen oder schon benutzt.
 	ErrBadCode = errors.New("Kopplungscode ungültig")
+	// ErrSourceTaken: Der Code gilt für ein bestehendes Gerät, die Kennung dieses Rechners gehört aber schon einem
+	// anderen Gerät desselben Benutzers (409 source_taken).
+	ErrSourceTaken = errors.New("Kennung gehört einem anderen Gerät")
 )
+
+// Gründe im 401 beim Liefern (protocol/doc.md, „Liefern“).
+const (
+	ReasonRepaired = "repaired" // Gerät wurde anderswo neu gekoppelt, dieser Schlüssel ist gesperrt
+	ReasonRevoked  = "revoked"  // Gerät oder Schlüssel in der Geräte-Ansicht gesperrt, oder Benutzer gesperrt
+	ReasonUnknown  = "unknown"  // Schlüssel unbekannt
+)
+
+// UnauthorizedError: Der Server lehnt den Geräteschlüssel beim Liefern ab (401). Reason ist einer der Gründe oben,
+// leer wenn der Server keinen (oder einen unbekannten) nennt. errors.Is(err, ErrUnauthorized) gilt.
+type UnauthorizedError struct {
+	Reason string
+}
+
+func (e *UnauthorizedError) Error() string { return ErrUnauthorized.Error() }
+
+func (e *UnauthorizedError) Is(target error) bool { return target == ErrUnauthorized }
+
+// unauthorizedReason liest den Grund aus dem Rumpf eines 401; nur die bekannten Werte zählen.
+func unauthorizedReason(body []byte, tooBig bool) string {
+	if tooBig {
+		return ""
+	}
+	var e struct {
+		Reason string `json:"reason"`
+	}
+	_ = json.Unmarshal(body, &e) // kein JSON: kein Grund
+	switch e.Reason {
+	case ReasonRepaired, ReasonRevoked, ReasonUnknown:
+		return e.Reason
+	}
+	return ""
+}
 
 const (
 	defaultRetryAfter = 5 * time.Second
 	maxRetryAfter     = 60 * time.Second
 )
 
-// RetryError: Der Server ist ausgelastet oder kurz nicht bereit (429/503); später erneut versuchen.
+// RetryError: Der Server ist ausgelastet oder kurz nicht bereit (429, 503 außer OldDatabaseError); später erneut versuchen.
 type RetryError struct {
 	Status int
 	After  time.Duration
@@ -32,10 +71,16 @@ func (e *RetryError) Error() string {
 	return fmt.Sprintf("Server vorübergehend nicht bereit (Status %d), neuer Versuch in %s", e.Status, e.After)
 }
 
-// RejectedError: Der Server lehnt die Anfrage ab (4xx). Path und Msg sind bereits mit Clean bereinigt.
+// ReasonSignKeyUnknown kennzeichnet ein 400 beim Liefern, weil eine Signatur zu keinem Signaturschlüssel des Geräts
+// passt; meist hat ein anderes Gerät den Schlüssel beim Koppeln übernommen (protocol/doc.md, „Liefern“).
+const ReasonSignKeyUnknown = "sign_key_unknown"
+
+// RejectedError: Der Server lehnt die Anfrage ab (4xx). Path und Msg sind bereits mit Clean bereinigt. Reason ist ein
+// bekannter Grund aus dem Rumpf (ReasonSignKeyUnknown), sonst leer.
 type RejectedError struct {
 	Status    int
 	Path, Msg string
+	Reason    string
 }
 
 func (e *RejectedError) Error() string {
@@ -47,6 +92,37 @@ func (e *RejectedError) Error() string {
 		s += " (" + e.Path + ")"
 	}
 	return s
+}
+
+// ReasonOldDatabase kennzeichnet ein 503, weil die Datenbank des Servers von einer älteren Version stammt
+// (protocol/doc.md, „Alte Datenbank“).
+const ReasonOldDatabase = "old_database"
+
+// OldDatabaseText gilt, wenn der Server bei ReasonOldDatabase keine Meldung mitschickt.
+const OldDatabaseText = "Die Datenbank des Servers stammt von einer älteren Version; der Betreiber muss tokenlore dort neu einrichten."
+
+// OldDatabaseError: Der Server antwortet 503 mit reason "old_database". Das ist kein ausgelasteter Server; ein neuer
+// Versuch hilft erst, wenn der Betreiber den Server neu eingerichtet hat. Msg ist die Meldung des Servers, bereinigt.
+type OldDatabaseError struct {
+	Msg string
+}
+
+func (e *OldDatabaseError) Error() string {
+	if e.Msg == "" {
+		return OldDatabaseText
+	}
+	return e.Msg
+}
+
+// oldDatabase meldet, ob der Rumpf eines 503 reason "old_database" nennt.
+func oldDatabase(body []byte, tooBig bool) bool {
+	if tooBig {
+		return false
+	}
+	var e struct {
+		Reason string `json:"reason"`
+	}
+	return json.Unmarshal(body, &e) == nil && e.Reason == ReasonOldDatabase
 }
 
 // ServerError: Fehler im Server (5xx außer 503).
@@ -121,4 +197,32 @@ func IsCertError(err error) bool {
 		ci  x509.CertificateInvalidError
 	)
 	return errors.As(err, &cve) || errors.As(err, &he) || errors.As(err, &ua) || errors.As(err, &ci)
+}
+
+// OutdatedError: Der Server nimmt diese Plugin-Version nicht mehr an (426 plugin_outdated). Min ist die Mindestversion
+// x.y.z, leer, wenn der Server keine gültige nennt.
+type OutdatedError struct {
+	Min string
+}
+
+func (e *OutdatedError) Error() string {
+	if e.Min == "" {
+		return "Plugin-Version zu alt für diesen Server"
+	}
+	return "Plugin-Version zu alt für diesen Server, nötig ist mindestens " + e.Min
+}
+
+// outdatedMin liest die Mindestversion aus dem Rumpf eines 426; nur x.y.z zählt.
+func outdatedMin(body []byte, tooBig bool) string {
+	if tooBig {
+		return ""
+	}
+	var e struct {
+		Min string `json:"min_plugin_version"`
+	}
+	_ = json.Unmarshal(body, &e) // kein JSON: keine Version
+	if protocol.MinVersionPattern.MatchString(e.Min) {
+		return e.Min
+	}
+	return ""
 }

@@ -33,7 +33,6 @@ func ClaudeJSONPath(configDir string) string {
 // sessionFile ist eine Sitzungsdatei; Rel ist relativ zum Konfigurationsordner, mit "/".
 type sessionFile struct {
 	Rel      string
-	Project  string
 	Subagent bool
 }
 
@@ -58,7 +57,7 @@ func listSessionFiles(configDir string) ([]sessionFile, error) {
 		for _, e := range entries {
 			switch {
 			case !e.IsDir() && strings.HasSuffix(e.Name(), ".jsonl"):
-				out = append(out, sessionFile{Rel: path.Join("projects", p.Name(), e.Name()), Project: p.Name()})
+				out = append(out, sessionFile{Rel: path.Join("projects", p.Name(), e.Name())})
 			case e.IsDir():
 				subs, err := os.ReadDir(filepath.Join(configDir, "projects", p.Name(), e.Name(), "subagents"))
 				if err != nil {
@@ -67,8 +66,8 @@ func listSessionFiles(configDir string) ([]sessionFile, error) {
 				for _, s := range subs {
 					if !s.IsDir() && strings.HasSuffix(s.Name(), ".jsonl") {
 						out = append(out, sessionFile{
-							Rel:     path.Join("projects", p.Name(), e.Name(), "subagents", s.Name()),
-							Project: p.Name(), Subagent: true,
+							Rel:      path.Join("projects", p.Name(), e.Name(), "subagents", s.Name()),
+							Subagent: true,
 						})
 					}
 				}

@@ -12,10 +12,11 @@ import (
 	"github.com/tokenlore/tokenlore/internal/testpki"
 	"github.com/tokenlore/tokenlore/lock"
 	"github.com/tokenlore/tokenlore/secret"
+	"github.com/tokenlore/tokenlore/source/claudecode"
 	"github.com/tokenlore/tokenlore/state"
 )
 
-// connectedEnv legt eine Verbindung zum Testserver an, wie connect sie hinterlässt (Schlüssel in der Datei).
+// connectedEnv legt eine Verbindung zum Testserver an, wie connect sie hinterlässt (Schlüssel in Dateien).
 func connectedEnv(t *testing.T, f *fakeServer) (cfg, data string) {
 	t.Helper()
 	cfg, data = connectEnv(t)
@@ -30,9 +31,13 @@ func connectedEnv(t *testing.T, f *fakeServer) (cfg, data string) {
 	if err := conn.Save(data); err != nil {
 		t.Fatal(err)
 	}
-	st, _ := state.Load(data)
-	st.Salt = testSalt
-	if err := st.Save(data); err != nil {
+	// Die Kennungsdatei benennt den Archivordner; connect legt sie immer an.
+	if err := claudecode.WriteIdentity(cfg, state.Identity{ID: "fedcba9876543210fedcba9876543210"}); err != nil {
+		t.Fatal(err)
+	}
+	// Ein Merkzettel mit Signaturschlüssel liegt schon da, wie connect ihn hinterlässt, damit Tests ihn vorher und
+	// nachher vergleichen können.
+	if _, err := ensureSignKey(data); err != nil {
 		t.Fatal(err)
 	}
 	return cfg, data

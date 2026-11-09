@@ -10,48 +10,89 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tokenlore/tokenlore/archive"
 	"github.com/tokenlore/tokenlore/state"
 )
 
+// sessionCfg legt einen Claude-Ordner mit angemeldetem Konto und, wenn id nicht leer ist, einer Kennungsdatei an.
+func sessionCfg(t *testing.T, id string) string {
+	t.Helper()
+	cfg := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", cfg)
+	os.WriteFile(filepath.Join(cfg, ".claude.json"), []byte(`{"oauthAccount":{"accountUuid":"acc-9"}}`), 0o600)
+	if id != "" {
+		writeIdentityFile(t, cfg, `{"id":"`+id+`"}`)
+	}
+	return cfg
+}
+
+func readStarts(t *testing.T, data, id string) string {
+	t.Helper()
+	b, _ := os.ReadFile(filepath.Join(state.ArchiveDir(data, id), archive.SessionsFile))
+	return string(b)
+}
+
+// Der Sessionstart hält Sitzung und angemeldetes Konto im Archivordner fest.
 func TestSessionStartRecords(t *testing.T) {
-	data := t.TempDir()
-	cj := filepath.Join(t.TempDir(), ".claude.json")
-	os.WriteFile(cj, []byte(`{"oauthAccount":{"accountUuid":"acc-9"}}`), 0o600)
-	if err := runSessionStart(strings.NewReader(`{"session_id":"s9","hook_event_name":"SessionStart"}`), data, cj); err != nil {
+	data, cfg := t.TempDir(), sessionCfg(t, fixedID)
+	if err := runSessionStart(strings.NewReader(`{"session_id":"s9","hook_event_name":"SessionStart"}`), data, cfg, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	st, _ := state.Load(data)
-	if st.Sessions["s9"] != "acc-9" {
-		t.Fatalf("Sessions %v", st.Sessions)
+	if got := readStarts(t, data, fixedID); !strings.Contains(got, `"session_id":"s9","account_id":"acc-9"`) {
+		t.Fatalf("sitzungen.jsonl: %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(data, "session-accounts.jsonl")); !os.IsNotExist(err) {
+		t.Fatal("session-accounts.jsonl geschrieben")
+	}
+	// Fortgesetzte Sitzung (gleiche session_id, etwa nach /resume oder /clear): kein zweiter Eintrag, auch ohne Kopplung.
+	for range 3 {
+		runSessionStart(strings.NewReader(`{"session_id":"s9"}`), data, cfg, time.Now())
+	}
+	if got := readStarts(t, data, fixedID); strings.Count(got, "\n") != 1 {
+		t.Fatalf("sitzungen.jsonl mit mehreren Einträgen je Sitzung: %q", got)
 	}
 }
 
-func TestSessionStartNoAccount(t *testing.T) {
-	data := t.TempDir()
-	if err := runSessionStart(strings.NewReader(`{"session_id":"s9"}`), data, filepath.Join(data, "fehlt.json")); err != nil {
-		t.Fatal(err)
+// Ohne Kennung (nie gekoppelt) und ohne angemeldetes Konto schreibt der Sessionstart nichts, stört aber auch nicht.
+// Fehlt nur die Kennungsdatei, gilt die Kopie im Merkzettel.
+func TestSessionStartWithoutIdentityOrAccount(t *testing.T) {
+	data, cfg := t.TempDir(), sessionCfg(t, "")
+	runSessionStart(strings.NewReader(`{"session_id":"s9"}`), data, cfg, time.Now())
+	if _, err := os.Stat(filepath.Join(data, "archiv")); !os.IsNotExist(err) {
+		t.Fatal("ohne Kennung ein Archiv angelegt")
 	}
 	st, _ := state.Load(data)
-	if len(st.Sessions) != 0 {
-		t.Fatalf("Sessions %v", st.Sessions)
+	st.Identity = &state.Identity{ID: fixedID}
+	st.Save(data)
+	if err := runSessionStart(strings.NewReader(`{"session_id":"s9"}`), data, cfg, time.Now()); err != nil || readStarts(t, data, fixedID) == "" {
+		t.Fatalf("Kopie der Kennung nicht genutzt: %v", err)
 	}
+	data2 := t.TempDir()
+	runSessionStart(strings.NewReader(`{"session_id":"s9"}`), data2, sessionCfgNoAccount(t), time.Now())
+	if _, err := os.Stat(filepath.Join(data2, "archiv")); !os.IsNotExist(err) {
+		t.Fatal("ohne Konto geschrieben")
+	}
+}
+
+func sessionCfgNoAccount(t *testing.T) string {
+	cfg := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", cfg)
+	writeIdentityFile(t, cfg, `{"id":"`+fixedID+`"}`)
+	return cfg
 }
 
 func TestSessionStartBadStdin(t *testing.T) {
-	if err := runSessionStart(strings.NewReader(`kaputt`), t.TempDir(), "x"); err != nil {
+	if err := runSessionStart(strings.NewReader(`kaputt`), t.TempDir(), t.TempDir(), time.Now()); err != nil {
 		t.Fatalf("kaputte Eingabe darf den Sessionstart nicht stören: %v", err)
 	}
 }
 
 func TestSessionStartRejectsOddSessionID(t *testing.T) {
-	data := t.TempDir()
-	cj := filepath.Join(t.TempDir(), ".claude.json")
-	os.WriteFile(cj, []byte(`{"oauthAccount":{"accountUuid":"acc-9"}}`), 0o600)
-	runSessionStart(strings.NewReader(`{"session_id":"`+strings.Repeat("a", 5000)+`"}`), data, cj)
-	runSessionStart(strings.NewReader(`{"session_id":"a\nb"}`), data, cj)
-	st, _ := state.Load(data)
-	if len(st.Sessions) != 0 {
-		t.Fatalf("ungültige session_id gespeichert: %d Einträge", len(st.Sessions))
+	data, cfg := t.TempDir(), sessionCfg(t, fixedID)
+	runSessionStart(strings.NewReader(`{"session_id":"`+strings.Repeat("a", 5000)+`"}`), data, cfg, time.Now())
+	runSessionStart(strings.NewReader(`{"session_id":"a\nb"}`), data, cfg, time.Now())
+	if got := readStarts(t, data, fixedID); got != "" {
+		t.Fatalf("ungültige session_id gespeichert: %q", got)
 	}
 }
 
@@ -61,7 +102,7 @@ func TestSessionStartNeverHangsOnOpenStdin(t *testing.T) {
 	go w.Write([]byte(`{"session_id":"s1"`)) // unvollständig, stdin wird nie geschlossen
 	start := time.Now()
 	done := make(chan struct{})
-	go func() { runSessionStart(r, t.TempDir(), "x"); close(done) }()
+	go func() { runSessionStart(r, t.TempDir(), t.TempDir(), time.Now()); close(done) }()
 	select {
 	case <-done:
 		if d := time.Since(start); d > sessionStartBudget+200*time.Millisecond {
@@ -83,6 +124,13 @@ func TestHelperProcess(t *testing.T) {
 		}
 		os.Setenv("GO_WANT_HELPER_PROCESS", "child")
 		os.Exit(run([]string{"session-start"}))
+	case "hook-end":
+		self := os.Args[0]
+		backgroundCommand = func() (string, []string) {
+			return self, []string{"-test.run=^TestHelperProcess$"}
+		}
+		os.Setenv("GO_WANT_HELPER_PROCESS", "child")
+		os.Exit(run([]string{"session-end"}))
 	case "child":
 		time.Sleep(1500 * time.Millisecond)
 		// Das Kind muss dasselbe Datenverzeichnis sehen wie der Hook.

@@ -4,6 +4,7 @@ package client
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -13,7 +14,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -33,10 +34,7 @@ var Version = "dev"
 // userAgent ist der Wert des Headers User-Agent aller Anfragen.
 func userAgent() string { return "tokenlore/" + Version }
 
-var (
-	dialer      = &net.Dialer{Timeout: 10 * time.Second}
-	saltPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
-)
+var dialer = &net.Dialer{Timeout: 10 * time.Second}
 
 // noRedirect: Eine Weiterleitung könnte den Schlüssel an ein anderes Ziel tragen; sie wird nie verfolgt.
 func noRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
@@ -90,18 +88,65 @@ func New(base *url.URL, caPEM []byte, timeout time.Duration) (*Client, error) {
 
 // PairResult ist die geprüfte Antwort auf eine Kopplung.
 type PairResult struct {
-	DeviceID                              int64
-	DeviceKey, ProjectSalt, CAFingerprint string
+	DeviceID                 int64
+	DeviceKey, CAFingerprint string
+	Repaired                 bool // ein bestehendes Gerät wurde neu gekoppelt
+	// SignKeysRefused sind gesendete Signaturschlüssel, die der Server nicht übernommen hat, weil sie einem
+	// anderen Gerät gehören. Nur Schlüssel, die in der Anfrage standen; leer, wenn keiner.
+	SignKeysRefused []string
 }
 
-// Pair tauscht den einmaligen Kopplungscode gegen Geräteschlüssel, Projekt-Salz und CA-Fingerabdruck.
-func (c *Client) Pair(ctx context.Context, code, name, goos, goarch string) (PairResult, error) {
+// SignKeys sind die öffentlichen Signaturschlüssel, die Pair meldet: der aktuelle und die früheren, ersetzten. Priv
+// ist der private Teil des aktuellen; mit ihm bildet Pair den Besitznachweis. Er geht nie an den Server.
+type SignKeys struct {
+	Public   string
+	Previous []string
+	Priv     ed25519.PrivateKey
+}
+
+func (k SignKeys) validate() error {
+	if !protocol.ValidSignPublicKey(k.Public) {
+		return errors.New("Signaturschlüssel ungültig")
+	}
+	if len(k.Priv) != ed25519.PrivateKeySize || protocol.EncodeSignPublicKey(k.Priv.Public().(ed25519.PublicKey)) != k.Public {
+		return errors.New("privater Signaturschlüssel fehlt oder passt nicht zum öffentlichen")
+	}
+	if len(k.Previous) > protocol.MaxSignKeysPrevious {
+		return fmt.Errorf("mehr als %d frühere Signaturschlüssel", protocol.MaxSignKeysPrevious)
+	}
+	for _, p := range k.Previous {
+		if !protocol.ValidSignPublicKey(p) {
+			return errors.New("früherer Signaturschlüssel ungültig")
+		}
+	}
+	return nil
+}
+
+// Pair tauscht den einmaligen Kopplungscode gegen Geräteschlüssel und CA-Fingerabdruck.
+// deviceSource ist die Kennung dieses Geräts für den Server (siehe protocol/doc.md, „Koppeln“). nameExplicit heißt,
+// der Name wurde mit --name gewählt: Nur dann ersetzt er beim Neukoppeln den Namen auf dem Server. Das Feld
+// device_name_explicit geht nur als true mit. plugin_version ist Version; sign die Signaturschlüssel dieses Rechners,
+// sign_public_keys_previous geht nur mit, wenn es frühere gibt. Ungültige Schlüssel gehen nie raus. serverID ist die
+// server_id aus Info; der Besitznachweis gilt nur für diesen Server.
+func (c *Client) Pair(ctx context.Context, code, name, goos, goarch, deviceSource, serverID string, nameExplicit bool, sign SignKeys) (PairResult, error) {
+	if !protocol.ServerIDPattern.MatchString(serverID) {
+		return PairResult{}, errors.New("server_id fehlt oder ist ungültig")
+	}
+	if err := sign.validate(); err != nil {
+		return PairResult{}, err
+	}
 	reqBody, err := json.Marshal(struct {
-		Code       string `json:"code"`
-		DeviceName string `json:"device_name"`
-		OS         string `json:"os"`
-		Arch       string `json:"arch"`
-	}{code, name, goos, goarch})
+		Code          string   `json:"code"`
+		DeviceName    string   `json:"device_name"`
+		NameExplicit  bool     `json:"device_name_explicit,omitempty"`
+		OS            string   `json:"os"`
+		Arch          string   `json:"arch"`
+		PluginVersion string   `json:"plugin_version"`
+		DeviceSource  string   `json:"device_source"`
+		SignPublic    string   `json:"sign_public_key"`
+		SignProof     string   `json:"sign_public_key_proof"`
+		SignPrevious  []string `json:"sign_public_keys_previous,omitempty"`
+	}{code, name, nameExplicit, goos, goarch, Version, deviceSource, sign.Public, protocol.SignPairProof(sign.Priv, serverID, code), sign.Previous})
 	if err != nil {
 		return PairResult{}, err
 	}
@@ -113,16 +158,22 @@ func (c *Client) Pair(ctx context.Context, code, name, goos, goarch string) (Pai
 		return PairResult{}, ErrBadCode
 	}
 	if status != http.StatusOK {
-		return PairResult{}, mapStatus(status, hdr, body, tooBig, "")
+		err := mapStatus(status, hdr, body, tooBig, "")
+		var rej *RejectedError
+		if status == http.StatusConflict && errors.As(err, &rej) && rej.Msg == "source_taken" {
+			return PairResult{}, ErrSourceTaken
+		}
+		return PairResult{}, err
 	}
 	if tooBig {
 		return PairResult{}, errors.New("Antwort des Servers zu groß")
 	}
 	var r struct {
-		DeviceID      int64  `json:"device_id"`
-		DeviceKey     string `json:"device_key"`
-		ProjectSalt   string `json:"project_salt"`
-		CAFingerprint string `json:"ca_fingerprint"`
+		DeviceID      int64    `json:"device_id"`
+		DeviceKey     string   `json:"device_key"`
+		CAFingerprint string   `json:"ca_fingerprint"`
+		Repaired      bool     `json:"repaired"` // fehlt es (älterer Server), gilt false
+		Refused       []string `json:"sign_keys_refused"`
 	}
 	// Die Fehlermeldungen nennen nie Inhalte der Antwort: Sie enthält den Schlüssel.
 	if json.Unmarshal(body, &r) != nil {
@@ -134,9 +185,6 @@ func (c *Client) Pair(ctx context.Context, code, name, goos, goarch string) (Pai
 	if !protocol.DeviceKeyPattern.MatchString(r.DeviceKey) {
 		return PairResult{}, errors.New("Antwort auf die Kopplung: Geräteschlüssel ungültig")
 	}
-	if !saltPattern.MatchString(r.ProjectSalt) {
-		return PairResult{}, errors.New("Antwort auf die Kopplung: Projekt-Salz ungültig")
-	}
 	// Leer ist gültig: Ein Server ohne eigene CA (öffentliches Zertifikat) hat keinen Fingerabdruck.
 	// Ob das reicht, entscheidet der Aufrufer (mit --ca muss er passen).
 	fp := ""
@@ -146,13 +194,29 @@ func (c *Client) Pair(ctx context.Context, code, name, goos, goarch string) (Pai
 			return PairResult{}, fmt.Errorf("Antwort auf die Kopplung: %w", err)
 		}
 	}
-	return PairResult{DeviceID: r.DeviceID, DeviceKey: r.DeviceKey, ProjectSalt: r.ProjectSalt, CAFingerprint: fp}, nil
+	// Nur gesendete Schlüssel übernehmen: Was der Server sonst nennt, könnte beliebiger Text sein.
+	var refused []string
+	for _, k := range r.Refused {
+		if (k == sign.Public || slices.Contains(sign.Previous, k)) && !slices.Contains(refused, k) {
+			refused = append(refused, k)
+		}
+	}
+	return PairResult{DeviceID: r.DeviceID, DeviceKey: r.DeviceKey, CAFingerprint: fp, Repaired: r.Repaired, SignKeysRefused: refused}, nil
 }
 
-// IngestResult ist die Antwort auf eine Lieferung.
+// IngestResult ist die Antwort auf eine Lieferung (protocol/doc.md, „Liefern“).
 type IngestResult struct {
-	Requests, Sessions, Accounts int
-	FlaggedSessions              []string
+	Requests, LegacyDays, Sessions, Accounts int
+	FlaggedSessions                          []string
+	// KnownRequests zählt die Anfragen des Pakets, die dieser Benutzer schon geliefert hatte; der Server ließ sie
+	// unverändert.
+	KnownRequests int
+	// ElsewhereRequests zählt die Anfragen des Pakets, die schon einem anderen Benutzer gehören; der Server hat
+	// sie nicht gespeichert.
+	ElsewhereRequests int
+	// LegacyRejectedDays sind die Vorgeschichte-Tage des Pakets, die der Server abgewiesen hat, weil ein anderes
+	// Gerät dort genau dieselben Werte hat.
+	LegacyRejectedDays []string
 }
 
 // Ingest liefert ein fertiges Paket (JSON) mit dem Geräteschlüssel aus.
@@ -166,7 +230,7 @@ func (c *Client) Ingest(ctx context.Context, key string, body []byte) (IngestRes
 		return IngestResult{}, err
 	}
 	if status == http.StatusUnauthorized {
-		return IngestResult{}, ErrUnauthorized
+		return IngestResult{}, &UnauthorizedError{Reason: unauthorizedReason(resp, tooBig)}
 	}
 	if status != http.StatusOK {
 		return IngestResult{}, mapStatus(status, hdr, resp, tooBig, key)
@@ -175,10 +239,14 @@ func (c *Client) Ingest(ctx context.Context, key string, body []byte) (IngestRes
 		return IngestResult{}, errors.New("Antwort des Servers zu groß")
 	}
 	var r struct {
-		Requests        int      `json:"requests"`
-		Sessions        int      `json:"sessions"`
-		Accounts        int      `json:"accounts"`
-		FlaggedSessions []string `json:"flagged_sessions"`
+		Requests           int      `json:"requests"`
+		LegacyDays         int      `json:"legacy_days"`
+		Sessions           int      `json:"sessions"`
+		Accounts           int      `json:"accounts"`
+		FlaggedSessions    []string `json:"flagged_sessions"`
+		KnownRequests      int      `json:"known_requests"`
+		ElsewhereRequests  int      `json:"elsewhere_requests"`
+		LegacyRejectedDays []string `json:"legacy_rejected_days"`
 	}
 	if json.Unmarshal(resp, &r) != nil {
 		return IngestResult{}, errors.New("Antwort auf die Lieferung nicht lesbar")
@@ -193,7 +261,22 @@ func (c *Client) Ingest(ctx context.Context, key string, body []byte) (IngestRes
 		}
 		flagged = append(flagged, s)
 	}
-	return IngestResult{Requests: r.Requests, Sessions: r.Sessions, Accounts: r.Accounts, FlaggedSessions: flagged}, nil
+	// Abgewiesene Tage nur mit gültigem Datum übernehmen: Das Plugin merkt sie sich und zeigt sie an.
+	var days []string
+	for _, d := range r.LegacyRejectedDays {
+		if validDay(d) {
+			days = append(days, d)
+		}
+	}
+	return IngestResult{Requests: r.Requests, LegacyDays: r.LegacyDays, Sessions: r.Sessions, Accounts: r.Accounts,
+		FlaggedSessions: flagged, KnownRequests: max(r.KnownRequests, 0), ElsewhereRequests: max(r.ElsewhereRequests, 0),
+		LegacyRejectedDays: days}, nil
+}
+
+// validDay prüft ein Datum JJJJ-MM-TT.
+func validDay(s string) bool {
+	_, err := time.Parse("2006-01-02", s)
+	return err == nil && len(s) == 10
 }
 
 // post sendet body als JSON und liest höchstens maxResponse Bytes der Antwort.
@@ -236,19 +319,34 @@ func readCapped(r io.Reader) (b []byte, tooBig bool, err error) {
 // falls der Server ihn zurückspiegelt (vor dem Kürzen, damit kein Teilstück übrig bleibt).
 func mapStatus(status int, hdr http.Header, body []byte, tooBig bool, key string) error {
 	switch {
+	case status == http.StatusUpgradeRequired:
+		// 426 bedeutet in diesem Protokoll immer plugin_outdated; auch ohne lesbaren Rumpf.
+		return &OutdatedError{Min: outdatedMin(body, tooBig)}
+	case status == http.StatusServiceUnavailable && oldDatabase(body, tooBig):
+		// Kein vorübergehender Zustand: nicht wiederholen, sondern die Meldung des Servers zeigen.
+		var e struct {
+			Error string `json:"error"`
+		}
+		_ = json.Unmarshal(body, &e)
+		return &OldDatabaseError{Msg: scrub(e.Error, key)}
 	case status == http.StatusTooManyRequests || status == http.StatusServiceUnavailable:
 		return &RetryError{Status: status, After: retryAfter(hdr)}
 	case status >= 500:
 		return &ServerError{Status: status}
 	case status >= 400:
 		var e struct {
-			Error string `json:"error"`
-			Path  string `json:"path"`
+			Error  string `json:"error"`
+			Path   string `json:"path"`
+			Reason string `json:"reason"`
 		}
 		if !tooBig {
 			_ = json.Unmarshal(body, &e) // kein JSON: Status allein reicht
 		}
-		return &RejectedError{Status: status, Path: scrub(e.Path, key), Msg: scrub(e.Error, key)}
+		// Nur bekannte Gründe zählen; den Wortlaut von error wertet das Plugin nicht aus.
+		if e.Reason != ReasonSignKeyUnknown {
+			e.Reason = ""
+		}
+		return &RejectedError{Status: status, Path: scrub(e.Path, key), Msg: scrub(e.Error, key), Reason: e.Reason}
 	case status >= 300 && status < 400:
 		return fmt.Errorf("Server leitet weiter (Status %d), Weiterleitungen werden nicht verfolgt", status)
 	default:

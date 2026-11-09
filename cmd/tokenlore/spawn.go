@@ -9,9 +9,12 @@ import (
 	"github.com/tokenlore/tokenlore/state"
 )
 
-// startBackgroundSync startet nach dem Sessionstart einen abgekoppelten Abgleich, aber nur mit Verbindung.
-// Fehler werden geschluckt: Der Sessionstart darf nie gestört werden.
-func startBackgroundSync(dataDir string) {
+// spawn startet ein abgekoppeltes Kind; Tests ersetzen es, um die Aufrufe zu zählen.
+var spawn = spawnBackground
+
+// startBackgroundSync startet nach Sessionstart oder Sitzungsende einen abgekoppelten Abgleich, aber nur mit
+// Verbindung; extra hängt Argumente an (etwa --ended). Fehler werden geschluckt: Der Hook darf nie stören.
+func startBackgroundSync(dataDir string, extra ...string) {
 	if _, ok, err := state.LoadConnection(dataDir); err != nil || !ok {
 		return
 	}
@@ -19,7 +22,7 @@ func startBackgroundSync(dataDir string) {
 	if exe == "" {
 		return
 	}
-	_ = spawnBackground(dataDir, exe, args...)
+	_ = spawn(dataDir, exe, append(args, extra...)...)
 }
 
 // backgroundCmd baut den Befehl für das Kind: ohne stdin/stdout/stderr (exec öffnet dann das Null-Gerät),

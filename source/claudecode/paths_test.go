@@ -52,8 +52,8 @@ func TestListSessionFiles(t *testing.T) {
 		t.Fatalf("%d Dateien: %+v", len(files), files)
 	}
 	want := map[string]sessionFile{
-		"projects/P 1 ü/s1.jsonl":             {Rel: "projects/P 1 ü/s1.jsonl", Project: "P 1 ü", Subagent: false},
-		"projects/P 1 ü/s1/subagents/a.jsonl": {Rel: "projects/P 1 ü/s1/subagents/a.jsonl", Project: "P 1 ü", Subagent: true},
+		"projects/P 1 ü/s1.jsonl":             {Rel: "projects/P 1 ü/s1.jsonl", Subagent: false},
+		"projects/P 1 ü/s1/subagents/a.jsonl": {Rel: "projects/P 1 ü/s1/subagents/a.jsonl", Subagent: true},
 	}
 	for _, f := range files {
 		if want[f.Rel] != f {

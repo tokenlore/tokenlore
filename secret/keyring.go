@@ -71,7 +71,7 @@ func keyringGet(user string) (string, error) {
 	select {
 	case r := <-ch:
 		if errors.Is(r.err, keyring.ErrNotFound) {
-			return "", ErrNotFound
+			return "", errAbsent
 		}
 		if r.err != nil {
 			return "", fmt.Errorf("Schlüsselspeicher lesen: %w", r.err)

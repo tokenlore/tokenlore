@@ -12,9 +12,9 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
-	"github.com/tokenlore/tokenlore/email"
 	"github.com/tokenlore/tokenlore/protocol"
 	"github.com/tokenlore/tokenlore/source"
 	"github.com/tokenlore/tokenlore/state"
@@ -22,17 +22,67 @@ import (
 
 const headMax = 4096
 
+// IdleAfter: Hat sich eine Sitzungsdatei so lange nicht geändert, gilt auch ihre letzte Anfrage als fertig.
+const IdleAfter = 5 * time.Minute
+
 // ClaudeCode ist die Quelle für Claude-Code-Sitzungsdateien.
 type ClaudeCode struct {
 	ConfigDir string
 	Loc       *time.Location // Ortszeit des Geräts für utc_offset_min
 	Now       func() time.Time
+	// PairedIdentity ist die Kennung, mit der gekoppelt wurde (Connection.Identity). Weicht die Kennungsdatei
+	// davon ab, legt Scan keinen Altbestand bei (deliver liefert dann ohnehin nichts, siehe deliver.CheckDevice);
+	// leer heißt: Kopplung ohne Kennung, nichts zu vergleichen.
+	PairedIdentity string
+	// Ended sind die Hauptdateien beendeter Sitzungen (relativ zu ConfigDir, mit /, wie EndedRel sie liefert): Ihre
+	// letzte Anfrage und die ihrer Subagenten gelten sofort als fertig (Hook SessionEnd).
+	Ended []string
+}
+
+// EndedRel macht aus dem Protokollnamen, den der Hook SessionEnd nennt (transcript_path), den Namen der Hauptdatei
+// relativ zu configDir, wie Scan ihn führt: projects/<ordner>/<sitzung>.jsonl. Ein Name außerhalb davon gilt nicht;
+// die Anfrage kommt dann beim nächsten Abgleich, wenn sie nach den übrigen Regeln fertig ist.
+func EndedRel(configDir, transcript string) (string, bool) {
+	if transcript == "" || !filepath.IsAbs(transcript) {
+		return "", false
+	}
+	try := func(base, p string) (string, bool) {
+		rel, err := filepath.Rel(base, p)
+		if err != nil {
+			return "", false
+		}
+		parts := strings.Split(filepath.ToSlash(rel), "/")
+		if len(parts) != 3 || parts[0] != "projects" || parts[1] == ".." || !strings.HasSuffix(parts[2], ".jsonl") {
+			return "", false
+		}
+		return strings.Join(parts, "/"), true
+	}
+	if rel, ok := try(filepath.Clean(configDir), filepath.Clean(transcript)); ok {
+		return rel, true
+	}
+	// Verknüpfte Ordner (etwa ~/.claude als Link): beide Seiten aufgelöst vergleichen.
+	base, err1 := filepath.EvalSymlinks(configDir)
+	p, err2 := filepath.EvalSymlinks(transcript)
+	if err1 != nil || err2 != nil {
+		return "", false
+	}
+	return try(base, p)
+}
+
+// ended meldet, ob rel zu einer beendeten Sitzung gehört: ihre Hauptdatei oder eine Datei ihrer Subagenten.
+func (c *ClaudeCode) ended(rel string) bool {
+	for _, e := range c.Ended {
+		if rel == e || strings.HasPrefix(rel, strings.TrimSuffix(e, ".jsonl")+"/subagents/") {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *ClaudeCode) Name() string { return "claude-code" }
 
-// Scan liest alle Sitzungsdateien ab ihrem Lesestand. st bleibt unverändert; der neue
-// Merkzettel steht in ScanResult.Next und wird erst nach erfolgreicher Lieferung gespeichert.
+// Scan liest alle Sitzungsdateien ab ihrem Lesestand. st bleibt unverändert; die neuen Lesestände stehen in
+// ScanResult.Next und werden gespeichert, sobald die gelesenen Anfragen im Archiv stehen.
 func (c *ClaudeCode) Scan(ctx context.Context, st *state.State) (source.ScanResult, error) {
 	next := st.Clone()
 	res := source.ScanResult{Next: next}
@@ -40,120 +90,75 @@ func (c *ClaudeCode) Scan(ctx context.Context, st *state.State) (source.ScanResu
 	if err != nil {
 		return res, err
 	}
-	sessions := map[string]*protocol.Session{}
-	var order []string
+	newFields := map[string]bool{}
+	held := map[string]bool{}
+	// owners: Konto je Sitzung aus ownerAccountUuid, über alle Dateien dieses Laufs (Hauptdatei und Subagenten).
+	owners := map[string]string{}
+	cur, curOK, curErr := ReadCurrentAccount(ClaudeJSONPath(c.ConfigDir))
+	if curOK && protocol.IDPattern.MatchString(cur.AccountID) {
+		res.CurrentAccountID, res.CurrentEmail = cur.AccountID, cur.Email
+	}
+	if curErr != nil {
+		res.Warnings = append(res.Warnings, fmt.Sprintf("angemeldetes Konto nicht lesbar: %v", curErr))
+	}
 	for _, f := range files {
 		if err := ctx.Err(); err != nil {
 			return res, err
 		}
-		fr, err := c.scanFile(f, st, next)
+		fr, err := c.scanFile(f, st, next, owners)
 		if err != nil {
 			res.Warnings = append(res.Warnings, fmt.Sprintf("%s: nicht lesbar (%v)", f.Rel, errors.Unwrap(err)))
 			continue
 		}
 		res.Warnings = append(res.Warnings, fr.warnings...)
-		res.Batch.Requests = append(res.Batch.Requests, fr.requests...)
-		for _, fs := range fr.sessions {
-			s := sessions[fs.SessionID]
-			if s == nil {
-				s = &protocol.Session{SessionID: fs.SessionID}
-				sessions[s.SessionID] = s
-				order = append(order, s.SessionID)
-			}
-			// Hauptdatei und Subagenten-Dateien teilen die Sitzung; gefüllte Werte gewinnen.
-			if s.ProjectID == "" {
-				s.ProjectID = fs.ProjectID
-			}
-			if fs.CCVersion != "" {
-				s.CCVersion = fs.CCVersion
-			}
-			if s.AccountID == "" {
-				s.AccountID = fs.AccountID
-			}
+		res.Lines = append(res.Lines, fr.lines...)
+		for _, n := range fr.newFields {
+			newFields[n] = true
+		}
+		for _, m := range fr.heldMonths {
+			held[m] = true
 		}
 	}
-	for _, id := range order {
-		res.Batch.Sessions = append(res.Batch.Sessions, *sessions[id])
+	// Konto aus dem Protokoll, auch wenn es erst in einer anderen Datei derselben Sitzung steht. Fehlt es, ergänzt
+	// das Archiv das Konto (archive.AddRequests).
+	for i := range res.Lines {
+		if res.Lines[i].AccountID == "" {
+			res.Lines[i].AccountID = owners[res.Lines[i].SessionID]
+		}
 	}
-	accounts, err := c.accounts(next)
+	res.HeldMonths = slices.Sorted(maps.Keys(held))
+	res.NewFields = slices.Sorted(maps.Keys(newFields))
+	if len(res.NewFields) > state.MaxNewFields {
+		res.NewFields = res.NewFields[:state.MaxNewFields]
+	}
+	ic, err := CheckIdentity(c.ConfigDir, st.Identity, c.PairedIdentity)
 	if err != nil {
-		res.Warnings = append(res.Warnings, fmt.Sprintf("angemeldetes Konto nicht lesbar: %v", err))
+		res.Warnings = append(res.Warnings, fmt.Sprintf("Kennungsdatei %s nicht lesbar: %v", IdentityFile, err))
 	}
-	res.Batch.Accounts = accounts
-	if !st.LegacyDone {
-		models, acts, err := readLegacy(c.ConfigDir)
-		if err != nil {
-			res.Warnings = append(res.Warnings, fmt.Sprintf("stats-cache.json nicht lesbar: %v", err))
-		} else {
-			models, acts, dropped := c.filterLegacy(models, acts)
-			if dropped > 0 {
-				res.Warnings = append(res.Warnings, fmt.Sprintf("stats-cache.json: %d ungültige Tageswerte ausgelassen", dropped))
-			}
-			res.Batch.LegacyModel, res.Batch.LegacyActivity = models, acts
-			next.LegacyDone = true
-		}
+	res.IdentityChanged = ic.Changed
+	if err == nil && ic.Known && !ic.Changed {
+		cur := ic.Current
+		next.Identity = &cur // die Datei gilt; die Kopie im Merkzettel zieht nach
 	}
 	return res, nil
 }
 
-// filterLegacy lässt Tageswerte weg, die der Server ablehnen würde, damit sie nicht die ganze Lieferung blockieren.
-func (c *ClaudeCode) filterLegacy(models []protocol.LegacyModelDay, acts []protocol.LegacyActivityDay) ([]protocol.LegacyModelDay, []protocol.LegacyActivityDay, int) {
-	now := c.Now()
-	dropped := 0
-	var m []protocol.LegacyModelDay
-	for _, d := range models {
-		if protocol.ValidateLegacyModel(d, now) != nil {
-			dropped++
-			continue
-		}
-		m = append(m, d)
-	}
-	var a []protocol.LegacyActivityDay
-	for _, d := range acts {
-		if protocol.ValidateLegacyActivity(d, now) != nil {
-			dropped++
-			continue
-		}
-		a = append(a, d)
-	}
-	return m, a, dropped
-}
-
-// accounts liefert alle bekannten Konten mit der E-Mail-Stufe des Geräts. Eine Adresse gibt es
-// nur für das gerade angemeldete Konto, weil nur dessen Adresse auf dem Gerät steht.
-func (c *ClaudeCode) accounts(st *state.State) ([]protocol.Account, error) {
-	cur, ok, err := ReadCurrentAccount(ClaudeJSONPath(c.ConfigDir))
-	ids := map[string]bool{}
-	for _, a := range st.Sessions {
-		ids[a] = true
-	}
-	if ok {
-		ids[cur.AccountID] = true
-	}
-	var out []protocol.Account
-	for _, id := range slices.Sorted(maps.Keys(ids)) {
-		a := protocol.Account{AccountID: id, EmailMode: st.EmailMode}
-		if ok && id == cur.AccountID {
-			a.Email = email.ForMode(st.EmailMode, cur.Email)
-		}
-		if protocol.ValidateAccount(a) != nil {
-			a.Email = "" // ungültige Adresse lieber weglassen als das ganze Paket gefährden
-		}
-		if protocol.ValidateAccount(a) != nil {
-			continue
-		}
-		out = append(out, a)
-	}
-	return out, err
-}
-
 type fileResult struct {
-	sessions []protocol.Session
-	requests []protocol.Request
-	warnings []string
+	lines []protocol.RequestLine
+	// newFields: Namen unbekannter Schlüssel in Anfragezeilen, mit Wiederholungen.
+	newFields []string
+	// heldMonths: Monate (UTC) der zurückgehaltenen, noch nicht fertigen Anfragen dieser Datei.
+	heldMonths []string
+	warnings   []string
 }
 
-func (c *ClaudeCode) scanFile(f sessionFile, st, next *state.State) (fileResult, error) {
+// scanFile liest eine Sitzungsdatei ab ihrem Lesestand. Übernommen werden nur fertige Anfragen (protocol/doc.md,
+// „Inhaltszeile: Anfrage“): Nach ihrer letzten Zeile folgt eine Zeile einer anderen Anfrage mit späterem Zeitpunkt,
+// die Datei hat sich seit IdleAfter nicht geändert, oder ihre Sitzung ist beendet (Ended). Der Lesestand bleibt vor der ersten zurückgehaltenen
+// Anfrage; steht er so (Offset < End), liest der nächste Lauf die Datei auch ohne Größenänderung erneut. Sind alle
+// Anfragen fertig, springt er auf das Ende, und die Datei wird erst wieder gelesen, wenn sie wächst.
+// owners sammelt das Konto je Sitzung aus ownerAccountUuid.
+func (c *ClaudeCode) scanFile(f sessionFile, st, next *state.State, owners map[string]string) (fileResult, error) {
 	var fr fileResult
 	full := filepath.Join(c.ConfigDir, filepath.FromSlash(f.Rel))
 	fh, err := os.Open(full)
@@ -166,13 +171,15 @@ func (c *ClaudeCode) scanFile(f sessionFile, st, next *state.State) (fileResult,
 		return fr, fmt.Errorf("stat: %w", err)
 	}
 	size := info.Size()
+	// Fertig ist auch die letzte Anfrage, wenn die Datei ruht oder ihre Sitzung beendet ist.
+	idle := c.Now().Sub(info.ModTime()) >= IdleAfter || c.ended(f.Rel)
 
 	var start int64
 	if mark, ok := st.Files[f.Rel]; ok && size >= mark.End && mark.Offset <= mark.End {
 		sum, err := headSum(fh, mark.HeadLen)
 		if err == nil && sum == mark.HeadSum {
-			if size == mark.End {
-				return fr, nil // nichts Neues
+			if size == mark.End && mark.Offset == mark.End {
+				return fr, nil // nichts Neues, nichts zurückgehalten
 			}
 			start = mark.Offset
 		}
@@ -188,11 +195,10 @@ func (c *ClaudeCode) scanFile(f sessionFile, st, next *state.State) (fileResult,
 		aggs       = map[string]*reqAgg{}
 		keys       []string
 		firstStart = map[string]int64{}
-		lastKey    string
-		fileSID    string   // erste sessionId der Datei, für Zeilen ohne eigene
-		sids       []string // Sitzungen in Reihenfolge des Auftretens
-		version    = map[string]string{}
-		owner      = map[string]string{}
+		firstTS    = map[string]time.Time{}
+		lastIdx    = map[string]int{} // Index der letzten Zeile der Anfrage in seq
+		seq        []time.Time        // Zeitpunkte aller Anfragezeilen, in Dateireihenfolge
+		fileSID    string             // erste sessionId der Datei, für Zeilen ohne eigene
 	)
 	for {
 		b, err := r.ReadBytes('\n')
@@ -211,15 +217,8 @@ func (c *ClaudeCode) scanFile(f sessionFile, st, next *state.State) (fileResult,
 			if fileSID == "" {
 				fileSID = l.SessionID
 			}
-			if _, ok := version[l.SessionID]; !ok {
-				version[l.SessionID] = ""
-				sids = append(sids, l.SessionID)
-			}
-			if l.Version != "" {
-				version[l.SessionID] = l.Version
-			}
-			if l.OwnerAccountUUID != "" {
-				owner[l.SessionID] = l.OwnerAccountUUID
+			if l.OwnerAccountUUID != "" && protocol.IDPattern.MatchString(l.OwnerAccountUUID) {
+				owners[l.SessionID] = l.OwnerAccountUUID
 			}
 		}
 		// Manche Backends liefern keine requestId; dann ist message.id allein der Schlüssel.
@@ -227,20 +226,42 @@ func (c *ClaudeCode) scanFile(f sessionFile, st, next *state.State) (fileResult,
 			continue
 		}
 		k := l.MessageID + "|" + l.RequestID
+		lt, _ := time.Parse(time.RFC3339Nano, l.Timestamp) // nicht lesbar: Nullzeit, gibt nichts frei
 		if aggs[k] == nil {
 			aggs[k] = &reqAgg{}
 			keys = append(keys, k)
 			firstStart[k] = lineStart
+			firstTS[k] = lt
 		}
 		aggs[k].add(l)
-		lastKey = k
+		lastIdx[k] = len(seq)
+		seq = append(seq, lt)
+		fr.newFields = append(fr.newFields, l.NewFields...)
 	}
 
-	// Lesestand vor die letzte Anfrage setzen: ihre Zeilen können noch unvollständig sein.
-	offset := end
-	if lastKey != "" {
-		offset = firstStart[lastKey]
+	// later[i] ist der späteste Zeitpunkt der Anfragezeilen nach Position i.
+	later := make([]time.Time, len(seq)+1)
+	for i := len(seq) - 1; i >= 0; i-- {
+		later[i] = later[i+1]
+		if seq[i].After(later[i]) {
+			later[i] = seq[i]
+		}
 	}
+	// Lesestand vor die erste zurückgehaltene Anfrage: Ihre Zeilen können noch unvollständig sein.
+	offset := end
+	finished := map[string]bool{}
+	heldMonths := map[string]bool{}
+	for _, k := range keys {
+		if idle || later[lastIdx[k]+1].After(firstTS[k]) {
+			finished[k] = true
+			continue
+		}
+		offset = min(offset, firstStart[k])
+		if !firstTS[k].IsZero() {
+			heldMonths[firstTS[k].UTC().Format("2006-01")] = true
+		}
+	}
+	fr.heldMonths = slices.Sorted(maps.Keys(heldMonths))
 	headLen := int(min(int64(headMax), size))
 	sum, err := headSum(fh, headLen)
 	if err != nil {
@@ -248,45 +269,30 @@ func (c *ClaudeCode) scanFile(f sessionFile, st, next *state.State) (fileResult,
 	}
 	next.Files[f.Rel] = state.FileMark{Offset: offset, End: end, HeadLen: headLen, HeadSum: sum}
 
-	for sid, acc := range owner {
-		next.Sessions[sid] = acc
-	}
-
-	used := map[string]bool{}
 	invalid := 0
 	for _, k := range keys {
+		if !finished[k] {
+			continue
+		}
 		a := aggs[k]
-		req, ok := a.toRequest(c.Loc, f.Subagent)
+		l, ok := a.toLine(c.Loc, f.Subagent)
 		if !ok {
 			if m := a.first.Model; m != "" && m != "<synthetic>" {
 				invalid++
 			}
 			continue
 		}
-		if req.SessionID == "" {
-			req.SessionID = fileSID
+		if l.SessionID == "" {
+			l.SessionID = fileSID
 		}
-		req.AccountID = next.Sessions[req.SessionID]
-		if protocol.ValidateRequest(req, c.Now()) != nil {
+		if protocol.ValidateRequestLine(l, c.Now()) != nil {
 			invalid++
 			continue
 		}
-		used[req.SessionID] = true
-		fr.requests = append(fr.requests, req)
+		fr.lines = append(fr.lines, l)
 	}
 	if invalid > 0 {
 		fr.warnings = append(fr.warnings, fmt.Sprintf("%s: %d ungültige Anfrage(n) ausgelassen", f.Rel, invalid))
-	}
-	project := ProjectID(st.Salt, f.Project)
-	for _, sid := range sids {
-		if !used[sid] {
-			continue
-		}
-		s := protocol.Session{SessionID: sid, ProjectID: project, CCVersion: version[sid], AccountID: next.Sessions[sid]}
-		if protocol.ValidateSession(s) != nil {
-			s.CCVersion = "" // einzig frei wählbarer Wert; Kennungen sind schon geprüft
-		}
-		fr.sessions = append(fr.sessions, s)
 	}
 	return fr, nil
 }

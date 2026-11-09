@@ -28,10 +28,12 @@ if [ "$win" = 0 ]; then
   if [ "$out" = "ARG[status]" ]; then ok "ohne Ausführungsbit"; else bad "ohne Ausführungsbit: $out"; fi
 fi
 
-# 3) Fehlendes Programm: session-start Exit 0, sonst Exit 1
+# 3) Fehlendes Programm: session-start und session-end Exit 0, sonst Exit 1
 rm -f "$dummy"
-sh "$tmp/bin/tokenlore" session-start >/dev/null 2>&1; rc=$?
-if [ $rc = 0 ]; then ok "fehlendes Programm bei session-start: Exit 0"; else bad "session-start Exit $rc"; fi
+for hook in session-start session-end; do
+  sh "$tmp/bin/tokenlore" "$hook" >/dev/null 2>&1; rc=$?
+  if [ $rc = 0 ]; then ok "fehlendes Programm bei $hook: Exit 0"; else bad "$hook Exit $rc"; fi
+done
 sh "$tmp/bin/tokenlore" status >/dev/null 2>&1; rc=$?
 if [ $rc = 1 ]; then ok "fehlendes Programm sonst: Exit 1"; else bad "status Exit $rc"; fi
 

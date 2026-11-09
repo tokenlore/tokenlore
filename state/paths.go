@@ -26,3 +26,8 @@ func DeviceDir() (string, error) {
 	}
 	return filepath.Join(base, "tokenlore"), nil
 }
+
+// ArchiveDir ist der Archivordner des Rechners mit der Kennung id im Datenverzeichnis dataDir.
+func ArchiveDir(dataDir, id string) string {
+	return filepath.Join(dataDir, "archiv", "rechner-"+id)
+}

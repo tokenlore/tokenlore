@@ -10,14 +10,15 @@ import (
 	"github.com/tokenlore/tokenlore/state"
 )
 
-func saveFile(dir, key string) error {
-	return state.WriteFileAtomic(dir, fileName, []byte(key))
+func saveFile(dir, name, key string) error {
+	return state.WriteFileAtomic(dir, name, []byte(key))
 }
 
-func loadFile(dir string) (string, error) {
-	b, err := os.ReadFile(filepath.Join(dir, fileName))
+// loadFile liest eine Schlüsseldatei; fehlt sie, ist der Fehler errAbsent.
+func loadFile(dir, name string) (string, error) {
+	b, err := os.ReadFile(filepath.Join(dir, name))
 	if errors.Is(err, fs.ErrNotExist) {
-		return "", ErrNotFound
+		return "", errAbsent
 	}
 	if err != nil {
 		return "", err
@@ -25,8 +26,8 @@ func loadFile(dir string) (string, error) {
 	return strings.TrimSpace(string(b)), nil
 }
 
-func removeFile(dir string) error {
-	err := os.Remove(filepath.Join(dir, fileName))
+func removeFile(dir, name string) error {
+	err := os.Remove(filepath.Join(dir, name))
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}

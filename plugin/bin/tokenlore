@@ -16,9 +16,9 @@ case "$arch" in
   *) arch= ;;
 esac
 
-# Sessionstart darf Claude Code nie stören: Fehler dort enden mit Exit 0.
+# Sessionstart und Sitzungsende dürfen Claude Code nie stören: Fehler dort enden mit Exit 0.
 fail=1
-[ "${1:-}" = "session-start" ] && fail=0
+case "${1:-}" in session-start|session-end) fail=0 ;; esac
 
 if [ -z "$os" ] || [ -z "$arch" ]; then
   echo "tokenlore: Plattform wird nicht unterstützt ($(uname -s 2>/dev/null) $(uname -m 2>/dev/null))." >&2

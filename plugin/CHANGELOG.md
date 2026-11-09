@@ -4,6 +4,48 @@ Was sich am Plugin für dich ändert. Format nach [Keep a Changelog](https://kee
 
 ## Unveröffentlicht
 
+## 0.6.0 – 2026-11-09
+
+### Neu
+
+- Ist dein Server älter als das Plugin, sagen `/tokenlore:sync`, `/tokenlore:status` und der Sitzungsstart „Dein tokenlore-Server ist älter als dieses Plugin …“ statt „bitte neu koppeln“; Neukoppeln klappt erst, wenn der Server aktualisiert ist.
+- Ein Rechner bleibt ein Gerät: Das Plugin legt im Claude-Ordner eine Datei `tokenlore-id` an und erkennt deinen Rechner daran wieder. Koppelst du neu, etwa nach einer Neuinstallation oder nach dem Sperren, bleibt es auf dem Server dasselbe Gerät mit denselben Zahlen.
+- Dein Altbestand (Zahlen von vor der Kopplung) kommt auf jedem Server vollständig an, auch wenn du ihn schon an einen anderen geschickt hast, und wird nachgeschickt, wenn er wächst. `--resend-legacy` brauchst du nicht mehr.
+- Hast du deinen Claude-Ordner oder den tokenlore-Datenordner auf einen anderen Rechner kopiert, liefert das Plugin dort nichts, bis du neu koppelst. `/tokenlore:connect` macht den Rechner dann ohne Rückfrage zu einem eigenen Gerät.
+- Hinweise vom Server: Lagen Anfragen schon bei einem anderen Benutzer oder hat der Server Tage aus der Zeit vor dem Koppeln nicht übernommen, weil ein anderes Gerät genau dieselben Zahlen hat, siehst du die Anzahl in `/tokenlore:status`, nach `/tokenlore:sync` und beim Sitzungsstart. Solche Tage schickt das Plugin nicht erneut, bis du neu koppelst oder sich ihre Zahlen ändern.
+- Meldungen, nach denen du neu koppeln musst, sagen dir die Schritte: Code auf der Webseite holen, Befehl in Claude Code einfügen.
+- Koppelst du ein Gerät neu, behält es seinen Namen auf dem Server; nur mit `--name` gibst du ihm einen neuen.
+- Verständliche Meldungen, wenn dein Gerät anderswo neu gekoppelt oder gesperrt wurde.
+- Archiv auf deinem Rechner: Das Plugin legt jede Anfrage zuerst unterschrieben in einem Archiv im tokenlore-Datenordner ab und liefert nur daraus. Löscht Claude Code alte Sitzungsdateien, bleiben ihre Zahlen im Archiv und kommen auf jedem Server an, mit dem du koppelst; nichts zählt doppelt. Wo das Archiv liegt, wie groß es wird und wie du es löschst, steht im README unter „Archiv“.
+- Mehr Angaben je Anfrage, nie Inhalt: Das Plugin schickt eine feste Liste, etwa alle Token-Arten, Modell, Effort, Werkzeugnamen mit Anzahl und die Version von Claude Code. Taucht in Claude Code ein neues Feld auf, nennt `/tokenlore:status` seinen Namen; mitgeschickt wird es nicht.
+- Nach dem Ende einer Sitzung kommen ihre Zahlen auf den Server, ohne dass du eine neue Sitzung startest, höchstens alle 5 Minuten. Kam der letzte Abgleich vor weniger als 5 Minuten, kommt die letzte Anfrage der Sitzung mit dem ersten Abgleich, der mindestens 5 Minuten nach dieser Anfrage läuft; nichts geht verloren, nichts zählt doppelt.
+- Löschst du `tokenlore-id` und den tokenlore-Datenordner, bekommt dein Rechner beim nächsten Koppeln dieselbe Kennung zurück und bleibt auf dem Server dasselbe Gerät. Die Kennung entsteht aus der Systemkennung deines Rechners, die selbst nie dein Gerät verlässt, und dem Ort des Claude-Ordners; erreichst du ihn über einen Symlink, bleibt die Kennung dieselbe. Hatte dein Rechner noch eine zufällige Kennung aus einer früheren Version, wird er dabei einmal ein neues Gerät; das kannst du auf der Webseite mit dem alten zusammenlegen.
+- Beim Koppeln weist das Plugin nach, dass es den Signaturschlüssel wirklich besitzt. So kann niemand deinen öffentlichen Schlüssel als seinen melden und dein Gerät aussperren.
+- Hat ein anderes Gerät beim Koppeln deinen Signaturschlüssel übernommen, etwa weil du den Datenordner samt Schlüssel auf einen anderen Rechner kopiert hast, sagt dir das Plugin das beim Sitzungsstart, bei `/tokenlore:sync` und in `/tokenlore:status` und nennt die Schritte zum Neukoppeln.
+- Hat ein anderes Gerät einen früheren Signaturschlüssel deines Rechners übernommen und fehlt dir dieser Schlüssel, liefert dein Rechner neue Zahlen trotzdem weiter. Ältere Zeilen mit dem übernommenen Schlüssel hält das Plugin zurück; sie bleiben in deinem Archiv, und `/tokenlore:status` und `/tokenlore:sync` sagen dir, wie viele es sind. Neu koppeln musst du dafür nicht. Ist das andere Gerät derselbe Rechner, lege beide auf der Webseite unter „Geräte“ zusammen und kopple danach neu; dann gehen auch die älteren Zeilen mit. `/tokenlore:connect` nennt nach dem ersten Abgleich dasselbe wie `/tokenlore:sync`, auch die Zahl dieser Zeilen.
+- Ist das Plugin für deinen Server zu alt, sagt es „Bitte tokenlore auf mindestens … aktualisieren“ und nennt die Befehle dazu. Deine Zahlen warten so lange im Archiv.
+- Zieht dein Server mit seiner Datenbank auf eine neue Adresse um, bleibt dein Rechner dort nach dem Neukoppeln dasselbe Gerät.
+- Jeder Rechner hat einen eigenen Signaturschlüssel; der Server nimmt nur Zeilen mit gültiger Unterschrift an. Fehlt der Schlüssel, meldet das Plugin „Signaturschlüssel fehlt, bitte neu koppeln.“; deine älteren Zeilen bleiben gültig.
+- Stammt die Datenbank deines Servers von einer älteren Version, zeigen `/tokenlore:connect`, `/tokenlore:sync`, `/tokenlore:status` und der Sitzungsstart die Meldung des Servers statt „Server ausgelastet“. Deine Zahlen warten im Archiv, bis der Betreiber den Server neu eingerichtet hat.
+- Ist eine Zeile im Archiv beschädigt, etwa von Hand geändert, schickt das Plugin sie nicht mit und nennt ihre Anzahl; alles andere geht weiter raus.
+
+### Geändert
+
+- Braucht einen Server mit Gerätekennung; die Option `--resend-legacy` gibt es nicht mehr.
+- Braucht einen tokenlore-Server, der Signaturen prüft. Nach dem Update koppelst du jeden Rechner einmal neu (`/tokenlore:connect` mit einem neuen Code); dabei entsteht der Signaturschlüssel, und alles, was Claude Code noch an Sitzungsdateien hat, kommt ins Archiv.
+- Deine volle E-Mail-Adresse steht nur lokal im Archiv; was davon an den Server geht, entscheidet weiter `/tokenlore:email`.
+- `sitzungen.jsonl` im Archiv hat je Sitzung nur einen Eintrag und bleibt auch ohne Verbindung klein: Einträge älter als 90 Tage fallen weg, höchstens 10 000 bleiben.
+- Nimmt der Server einen Signaturschlüssel beim Koppeln nicht an, weil er dort einem anderen Gerät gehört, zeigt das Plugin eine Warnung.
+
+### Entfernt
+
+- Eine Projekt-Kennung wird nicht mehr gesendet.
+- Alte Dateien früherer Versionen (`session-accounts.jsonl`, alte Angaben im Merkzettel und in `tokenlore-id`) räumt das Plugin selbst weg.
+
+### Doku
+
+- Das README sagt unter „Voraussetzungen“, dass das Plugin nur in Claude Code läuft und im Chat von Claude (Browser, Desktop-App, Handy) nichts tut.
+
 ## 0.5.0 – 2026-10-26
 
 ### Neu

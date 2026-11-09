@@ -2,29 +2,58 @@
 package claudecode
 
 import (
+	"bytes"
 	"encoding/json"
+	"regexp"
+	"slices"
 	"sort"
 	"time"
 
 	"github.com/tokenlore/tokenlore/protocol"
 )
 
-// rawLine enthält nur die Felder, die tokenlore braucht. Inhalte (text, input, thinking)
-// haben hier kein Feld und werden vom JSON-Decoder verworfen.
+// rawLine enthält nur die Felder, die tokenlore braucht. Inhalte (text, input, thinking) haben hier kein Feld und
+// werden vom JSON-Decoder verworfen. Felder der Inhaltszeile, die Claude Code erst neuerdings schreibt, sind
+// looseString/looseBool: Ein anderer Typ macht sie leer, nicht die ganze Zeile unlesbar.
 type rawLine struct {
-	Type             string `json:"type"`
-	SessionID        string `json:"sessionId"`
-	RequestID        string `json:"requestId"`
-	Timestamp        string `json:"timestamp"`
-	Version          string `json:"version"`
-	OwnerAccountUUID string `json:"ownerAccountUuid"`
+	Type             string      `json:"type"`
+	SessionID        string      `json:"sessionId"`
+	RequestID        string      `json:"requestId"`
+	Timestamp        string      `json:"timestamp"`
+	Version          string      `json:"version"`
+	OwnerAccountUUID string      `json:"ownerAccountUuid"`
+	UUID             looseString `json:"uuid"`
+	ParentUUID       looseString `json:"parentUuid"`
+	RequestedModel   looseString `json:"requestedModel"`
+	Effort           looseString `json:"effort"`
+	Entrypoint       looseString `json:"entrypoint"`
+	IsSidechain      looseBool   `json:"isSidechain"`
 	Message          *struct {
-		ID         string                     `json:"id"`
-		Model      string                     `json:"model"`
-		StopReason string                     `json:"stop_reason"`
-		Content    json.RawMessage            `json:"content"` // nur kurz zum Lesen der Werkzeugnamen
-		Usage      map[string]json.RawMessage `json:"usage"`
+		ID         string          `json:"id"`
+		Model      string          `json:"model"`
+		StopReason string          `json:"stop_reason"`
+		Content    json.RawMessage `json:"content"` // nur kurz zum Lesen der Werkzeugnamen
+		Usage      json.RawMessage `json:"usage"`
 	} `json:"message"`
+}
+
+// looseString nimmt nur einen JSON-Text an; jeder andere Wert ergibt "".
+type looseString string
+
+func (s *looseString) UnmarshalJSON(b []byte) error {
+	var v string
+	if json.Unmarshal(b, &v) == nil {
+		*s = looseString(v)
+	}
+	return nil
+}
+
+// looseBool nimmt nur true an; jeder andere Wert ergibt false.
+type looseBool bool
+
+func (v *looseBool) UnmarshalJSON(b []byte) error {
+	*v = looseBool(bytes.Equal(b, []byte("true")))
+	return nil
 }
 
 type contentBlock struct {
@@ -32,25 +61,58 @@ type contentBlock struct {
 	Name string `json:"name"`
 }
 
-type usage struct {
-	Input, Output, CacheCreate, CacheRead, Cache1h, Cache5m, Thinking int64
-	WebSearch, WebFetch                                               int
-	Extra                                                             map[string]any
-}
-
 type line struct {
 	Type, SessionID, RequestID, Timestamp, Version, OwnerAccountUUID string
+	UUID, ParentUUID, RequestedModel, Effort, Entrypoint             string
+	Sidechain                                                        bool
 	MessageID, Model, StopReason                                     string
-	Usage                                                            *usage
-	ToolNames                                                        []string
+	// Usage ist der Block message.usage, Zahlen als json.Number; nil, wenn die Zeile keinen hat.
+	Usage     map[string]any
+	ToolNames []string
+	// NewFields sind die Namen unbekannter Schlüssel einer Anfragezeile (oberste Ebene und message.…), nie Werte.
+	NewFields []string
 }
 
-// knownUsage sind die Felder aus message.usage, die tokenlore selbst auswertet.
-var knownUsage = map[string]bool{
-	"input_tokens": true, "output_tokens": true, "cache_creation_input_tokens": true,
-	"cache_read_input_tokens": true, "output_tokens_details": true, "server_tool_use": true,
-	"cache_creation": true,
+// Schlüssel einer Anfragezeile (type assistant mit message.usage). Bekannt sind die Felder, die tokenlore liest,
+// und die, die es kennt und absichtlich nicht übernimmt. Gesperrt sind Felder mit Inhalt, Pfaden oder Projekt;
+// sie kommen nie in eine Inhaltszeile. Jeder andere Schlüssel gilt als neu und wird nur mit Namen gemeldet.
+var (
+	knownTop = setOf(
+		// gelesen
+		"type", "sessionId", "requestId", "timestamp", "version", "ownerAccountUuid", "uuid", "parentUuid",
+		"requestedModel", "effort", "entrypoint", "isSidechain", "message",
+		// bekannt, nicht übernommen
+		"userType", "perTurnEffort", "advisorModel", "serverClassifierRequest", "requestRef", "apiBlockIndex",
+		"agentId", "attributionAgent", "attributionPlugin", "attributionMcpTool", "attributionMcpServer",
+		"attributionSkill", "thinkingDurationMs", "thinkingDisplay", "quotaLimits", "isApiErrorMessage", "error",
+		"apiError", "apiErrorStatus", "apiErrorParams", "slug", "isMeta",
+	)
+	blockedTop = setOf("content", "wireToolInputs", "wireIngestContext", "cwd", "gitBranch", "toolUseResult",
+		"attachment", "snapshot", "lastPrompt", "customTitle", "title", "summary", "path", "params",
+		"serverClassifierContext", "hookAdditionalContext")
+	knownMessage = setOf(
+		// gelesen; aus content nur die Namen der tool_use-Blöcke
+		"id", "model", "stop_reason", "usage",
+		// bekannt, nicht übernommen
+		"type", "role", "stop_details", "diagnostics", "context_management", "container", "input_transformations",
+		"output_config",
+	)
+	blockedMessage = setOf("content", "stop_sequence")
+)
+
+func setOf(keys ...string) map[string]bool {
+	m := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		m[k] = true
+	}
+	return m
 }
+
+// fieldNamePattern: nur solche Namen werden gemeldet; andere (Leerzeichen, Sonderzeichen) übergeht das Plugin.
+var fieldNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
+// maxFieldName ist die Länge, auf die ein gemeldeter Name gekürzt wird.
+const maxFieldName = 64
 
 func parseLine(b []byte) (line, error) {
 	var r rawLine
@@ -58,7 +120,9 @@ func parseLine(b []byte) (line, error) {
 		return line{}, err
 	}
 	l := line{Type: r.Type, SessionID: r.SessionID, RequestID: r.RequestID, Timestamp: r.Timestamp,
-		Version: r.Version, OwnerAccountUUID: r.OwnerAccountUUID}
+		Version: r.Version, OwnerAccountUUID: r.OwnerAccountUUID, UUID: string(r.UUID),
+		ParentUUID: string(r.ParentUUID), RequestedModel: string(r.RequestedModel), Effort: string(r.Effort),
+		Entrypoint: string(r.Entrypoint), Sidechain: bool(r.IsSidechain)}
 	if r.Message == nil {
 		return l, nil
 	}
@@ -71,70 +135,52 @@ func parseLine(b []byte) (line, error) {
 			}
 		}
 	}
-	if r.Message.Usage != nil {
-		l.Usage = parseUsage(r.Message.Usage)
+	if len(r.Message.Usage) > 0 {
+		d := json.NewDecoder(bytes.NewReader(r.Message.Usage))
+		d.UseNumber()
+		var u any
+		if d.Decode(&u) == nil {
+			l.Usage, _ = u.(map[string]any)
+		}
+	}
+	if l.Type == "assistant" && l.Usage != nil {
+		l.NewFields = newFields(b)
 	}
 	return l, nil
 }
 
-func parseUsage(m map[string]json.RawMessage) *usage {
-	u := &usage{}
-	num := func(k string) int64 {
-		var v int64
-		_ = json.Unmarshal(m[k], &v)
-		return v
+// newFields liefert die Namen der Schlüssel einer Anfragezeile, die weder bekannt noch gesperrt sind, sortiert.
+// Schlüssel von message stehen als „message.<Name>“ da.
+func newFields(b []byte) []string {
+	var top map[string]json.RawMessage
+	if json.Unmarshal(b, &top) != nil {
+		return nil
 	}
-	u.Input, u.Output = num("input_tokens"), num("output_tokens")
-	u.CacheCreate, u.CacheRead = num("cache_creation_input_tokens"), num("cache_read_input_tokens")
-	var otd struct {
-		Thinking int64 `json:"thinking_tokens"`
+	var out []string
+	add := func(prefix, k string) {
+		if !fieldNamePattern.MatchString(k) {
+			return
+		}
+		if len(k) > maxFieldName {
+			k = k[:maxFieldName]
+		}
+		out = append(out, prefix+k)
 	}
-	_ = json.Unmarshal(m["output_tokens_details"], &otd)
-	u.Thinking = otd.Thinking
-	var stu struct {
-		Search int `json:"web_search_requests"`
-		Fetch  int `json:"web_fetch_requests"`
-	}
-	_ = json.Unmarshal(m["server_tool_use"], &stu)
-	u.WebSearch, u.WebFetch = stu.Search, stu.Fetch
-	var cc struct {
-		H1 int64 `json:"ephemeral_1h_input_tokens"`
-		M5 int64 `json:"ephemeral_5m_input_tokens"`
-	}
-	_ = json.Unmarshal(m["cache_creation"], &cc)
-	u.Cache1h, u.Cache5m = cc.H1, cc.M5
-
-	// Unbekannte flache Felder als Extra: alphabetisch, höchstens MaxExtraFields.
-	var keys []string
-	for k := range m {
-		if !knownUsage[k] {
-			keys = append(keys, k)
+	for k := range top {
+		if !knownTop[k] && !blockedTop[k] {
+			add("", k)
 		}
 	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		if len(u.Extra) >= protocol.MaxExtraFields {
-			break
-		}
-		var v any
-		if json.Unmarshal(m[k], &v) != nil {
-			continue
-		}
-		switch x := v.(type) {
-		case float64:
-		case string:
-			if r := []rune(x); len(r) > protocol.MaxExtraString {
-				v = string(r[:protocol.MaxExtraString])
+	var msg map[string]json.RawMessage
+	if json.Unmarshal(top["message"], &msg) == nil {
+		for k := range msg {
+			if !knownMessage[k] && !blockedMessage[k] {
+				add("message.", k)
 			}
-		default:
-			continue
 		}
-		if u.Extra == nil {
-			u.Extra = map[string]any{}
-		}
-		u.Extra[k] = v
 	}
-	return u
+	sort.Strings(out)
+	return slices.Compact(out)
 }
 
 // invalidTool ersetzt Werkzeugnamen, die nicht zu protocol.ToolPattern passen.
@@ -143,10 +189,14 @@ const invalidTool = "_invalid"
 // reqAgg sammelt die Zeilen eines (message.id, requestId)-Paars.
 type reqAgg struct {
 	first line
-	u     usage
-	tools map[string]int
-	stop  string
-	n     int
+	// Optionale Angaben: der erste nicht leere Wert über alle Zeilen der Anfrage.
+	version, requestedModel, effort, entrypoint string
+	sidechain                                   bool
+	usage                                       map[string]any // usage der Zeile mit dem größten output_tokens
+	usageOut                                    int64
+	tools                                       map[string]int
+	stop                                        string
+	n                                           int
 }
 
 func (a *reqAgg) add(l line) {
@@ -156,6 +206,13 @@ func (a *reqAgg) add(l line) {
 	a.n++
 	if l.StopReason != "" {
 		a.stop = l.StopReason
+	}
+	a.sidechain = a.sidechain || l.Sidechain
+	for dst, v := range map[*string]string{&a.version: l.Version, &a.requestedModel: l.RequestedModel,
+		&a.effort: l.Effort, &a.entrypoint: l.Entrypoint} {
+		if *dst == "" {
+			*dst = v
+		}
 	}
 	for _, t := range l.ToolNames {
 		if a.tools == nil {
@@ -167,40 +224,57 @@ func (a *reqAgg) add(l line) {
 		}
 		a.tools[t]++
 	}
-	if u := l.Usage; u != nil {
-		a.u.Input = max(a.u.Input, u.Input)
-		a.u.Output = max(a.u.Output, u.Output)
-		a.u.CacheCreate = max(a.u.CacheCreate, u.CacheCreate)
-		a.u.CacheRead = max(a.u.CacheRead, u.CacheRead)
-		a.u.Cache1h = max(a.u.Cache1h, u.Cache1h)
-		a.u.Cache5m = max(a.u.Cache5m, u.Cache5m)
-		a.u.Thinking = max(a.u.Thinking, u.Thinking)
-		a.u.WebSearch = max(a.u.WebSearch, u.WebSearch)
-		a.u.WebFetch = max(a.u.WebFetch, u.WebFetch)
-		if a.u.Extra == nil {
-			a.u.Extra = u.Extra
+	// Frühe Zeilen einer Anfrage sind Streaming-Zwischenstände (Cache-Werte null, output_tokens zu klein); die Zeile
+	// mit dem größten output_tokens trägt die Endwerte, bei Gleichstand die letzte.
+	if l.Usage != nil {
+		out := outputTokens(l.Usage)
+		if a.usage == nil || out >= a.usageOut {
+			a.usage, a.usageOut = l.Usage, out
 		}
 	}
 }
 
-// toRequest baut die Anfrage. ok ist false für "<synthetic>", leeres oder ungültiges Modell
-// und nicht lesbare Zeitstempel.
-func (a *reqAgg) toRequest(loc *time.Location, subagent bool) (protocol.Request, bool) {
+// outputTokens liest output_tokens; fehlt der Wert oder ist er keine ganze Zahl, gilt 0.
+func outputTokens(u map[string]any) int64 {
+	n, ok := u["output_tokens"].(json.Number)
+	if !ok {
+		return 0
+	}
+	v, err := n.Int64()
+	if err != nil {
+		return 0
+	}
+	return v
+}
+
+// valid gibt s zurück, wenn es zum Muster passt, sonst "": Ein ungültiger optionaler Wert fehlt in der Zeile.
+func valid(p *regexp.Regexp, s string) string {
+	if s == "" || !p.MatchString(s) {
+		return ""
+	}
+	return s
+}
+
+// toLine baut die Inhaltszeile mit der festen Feldliste. ok ist false für "<synthetic>", leeres oder ungültiges
+// Modell, fehlendes usage und nicht lesbare Zeitstempel. SessionID und AccountID setzt der Aufrufer, wenn nötig.
+func (a *reqAgg) toLine(loc *time.Location, subagent bool) (protocol.RequestLine, bool) {
 	f := a.first
-	if f.Model == "" || f.Model == "<synthetic>" || !protocol.ModelPattern.MatchString(f.Model) {
-		return protocol.Request{}, false
+	if f.Model == "" || f.Model == "<synthetic>" || !protocol.ModelPattern.MatchString(f.Model) || a.usage == nil {
+		return protocol.RequestLine{}, false
 	}
 	ts, err := time.Parse(time.RFC3339Nano, f.Timestamp)
 	if err != nil {
-		return protocol.Request{}, false
+		return protocol.RequestLine{}, false
 	}
 	_, off := ts.In(loc).Zone()
-	return protocol.Request{
-		RequestID: f.RequestID, MessageID: f.MessageID, SessionID: f.SessionID,
+	return protocol.RequestLine{
+		Kind: protocol.KindRequest, RequestID: f.RequestID, MessageID: f.MessageID, SessionID: f.SessionID,
+		UUID: valid(protocol.IDPattern, f.UUID), ParentUUID: valid(protocol.IDPattern, f.ParentUUID),
 		TS: ts.UTC(), UTCOffsetMin: off / 60, Model: f.Model,
-		Input: a.u.Input, Output: a.u.Output, CacheCreate: a.u.CacheCreate, CacheRead: a.u.CacheRead,
-		Cache1h: a.u.Cache1h, Cache5m: a.u.Cache5m, Thinking: a.u.Thinking,
-		WebSearch: a.u.WebSearch, WebFetch: a.u.WebFetch, StopReason: a.stop,
-		Subagent: subagent, Tools: a.tools, Extra: a.u.Extra,
+		RequestedModel: valid(protocol.ModelPattern, a.requestedModel),
+		Effort:         valid(protocol.StopPattern, a.effort), Entrypoint: valid(protocol.StopPattern, a.entrypoint),
+		CCVersion: valid(protocol.VersionPattern, a.version), StopReason: valid(protocol.StopPattern, a.stop),
+		Subagent: subagent || a.sidechain, Tools: a.tools,
+		Usage: protocol.SanitizeUsage(a.usage),
 	}, true
 }
