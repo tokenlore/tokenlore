@@ -15,7 +15,8 @@ import (
 )
 
 // SessionsFile hält je Sitzung das Konto, das beim Sitzungsstart angemeldet war. Es gehört zum Archiv, ist nicht
-// signiert und geht nie an den Server; es dient nur dem Konto einer Anfrage ohne ownerAccountUuid.
+// signiert und geht nie an den Server; es legt das Konto einer Anfrage fest, die ihre Sitzung noch nicht im Archiv
+// hat, und geht dabei ownerAccountUuid vor.
 const SessionsFile = "sitzungen.jsonl"
 
 const (

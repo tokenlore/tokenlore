@@ -10,7 +10,7 @@ Einen zentralen tokenlore-Server gibt es nicht: Jeder betreibt seinen eigenen, u
 
 Bitte vor dem Koppeln lesen. Die Feldliste mit allen Grenzen steht in [`PROTOCOL.md`](PROTOCOL.md) und ist die maßgebliche Quelle. <!-- doku-ok: Ziel liegt im veröffentlichten Paket -->
 
-**Was das Plugin liest:** die Sitzungsdateien von Claude Code unter `~/.claude/projects/` (nur die Nutzungsangaben jeder API-Anfrage), `stats-cache.json` (Tageswerte für die Vorgeschichte), die Kontokennung und E-Mail-Adresse aus `~/.claude.json` und die eigene Kennungsdatei `~/.claude/tokenlore-id` (siehe [Ein Rechner, ein Gerät](#ein-rechner-ein-gerät)).
+**Was das Plugin liest:** die Sitzungsdateien von Claude Code unter `~/.claude/projects/` (nur die Nutzungsangaben jeder API-Anfrage), `stats-cache.json` (Tageswerte für die Vorgeschichte), die Kontokennung und E-Mail-Adresse aus `~/.claude.json` (Anmeldung von `claude` im Terminal) und aus den Umgebungsvariablen `CLAUDE_CODE_ACCOUNT_UUID` und `CLAUDE_CODE_USER_EMAIL` (Konto, mit dem die Desktop-App von Claude eine Sitzung führt) und die eigene Kennungsdatei `~/.claude/tokenlore-id` (siehe [Ein Rechner, ein Gerät](#ein-rechner-ein-gerät)).
 
 **Erst ins Archiv, dann zum Server:** Jede fertige Anfrage schreibt das Plugin zuerst als signierte Zeile in sein [Archiv](#archiv) auf diesem Rechner. Gesendet wird nur aus dem Archiv, Zeile für Zeile unverändert. So geht nichts verloren, wenn Claude Code alte Sitzungsdateien löscht.
 
@@ -29,11 +29,11 @@ Bitte vor dem Koppeln lesen. Die Feldliste mit allen Grenzen steht in [`PROTOCOL
 
 **Signatur:** Jede Zeile im Archiv trägt eine Ed25519-Signatur mit dem Signaturschlüssel dieses Rechners. Der Server nimmt nur Zeilen an, deren Signatur zu einem Schlüssel passt, den dieses Gerät beim Koppeln gemeldet hat, und speichert die Signatur mit. Eine kopierte oder nachträglich geänderte Zeile kommt so nicht an. Der private Schlüssel bleibt auf dem Rechner (siehe [Ablage und Schlüssel](#ablage-und-schlüssel)). Wer an deinem Rechner deinen Schlüssel auslesen kann, kann damit auch eigene Zeilen signieren: Die Signatur schützt vor Kopien und Versehen, nicht vor Absicht.
 
-**Was Claude mitliest:** Die Ausgabe eines `/tokenlore:…`-Befehls landet in Claudes Kontext. `/tokenlore:status` zeigt deshalb nur die Anzahl der Warnungen. `/tokenlore:status --warnings` zeigt die Texte (Claude liest dann die Pfade mit), `/tokenlore:status --next` das ganze nächste Paket (Claude liest dann Konto-IDs und Werkzeugnamen mit).
+**Was Claude mitliest:** Die Ausgabe eines `/tokenlore:…`-Befehls landet in Claudes Kontext. `/tokenlore:email` nennt dort deshalb nie eine Adresse; das Auswahlfenster des Befehls liest Claude nicht. `/tokenlore:status` zeigt deshalb nur die Anzahl der Warnungen. `/tokenlore:status --warnings` zeigt die Texte (Claude liest dann die Pfade mit), `/tokenlore:status --next` das ganze nächste Paket (Claude liest dann Konto-IDs, Werkzeugnamen und die Adressen nach der E-Mail-Stufe mit).
 
 **Werkzeugnamen:** Sie werden voll gesendet, auch die von MCP-Servern (`mcp__<server>__<werkzeug>`). Der Servername kann einen Firmen- oder Kundennamen enthalten. Wenn dich das stört, nutze solche Server nicht auf gekoppelten Geräten oder koppele nicht.
 
-**E-Mail-Adresse des Kontos (Standard: aus):** Im Archiv steht die volle Adresse einmal je Konto in `konten.jsonl`; was davon gesendet wird, entscheidet die Stufe. `/tokenlore:email` zeigt die Stufen.
+**E-Mail-Adresse des Kontos (Standard: aus):** Im Archiv steht die volle Adresse einmal je Konto in `konten.jsonl`; was davon gesendet wird, entscheidet die Stufe. Sie gilt für alle Konten. `/tokenlore:email` ohne Argument öffnet ein Auswahlfenster mit den Stufen Aus, Kurz und Voll und der Adresse des Kontos dieser Sitzung. Ohne Auswahlfenster (ältere Claude-Code-Versionen) zeigt der Befehl Stufe und Konto ohne Adresse; setzen geht dann mit `/tokenlore:email off|short|full`.
 
 - `off` sendet nichts und löscht eine gespeicherte Adresse auf dem Server.
 - `short` sendet eine gekürzte Form (erste zwei Zeichen und Domain); die volle Adresse verlässt das Gerät nicht.
@@ -58,7 +58,7 @@ Das Archiv ist die einzige Quelle für den Server. Es hält jede Anfrage dieses 
 | `JJJJ-MM.nachtrag.jsonl` | Anfragen, die erst nach dem Packen ihres Monats fertig wurden |
 | `vorgeschichte.jsonl` | Tageswerte aus `stats-cache.json`, einmal übernommen |
 | `konten.jsonl` | je Konto Konto-ID und volle E-Mail-Adresse |
-| `sitzungen.jsonl` | je Sitzung ein Eintrag mit dem beim Start angemeldeten Konto; geht nie an den Server; Einträge älter als 90 Tage fallen weg, höchstens 10 000 bleiben, auch ohne Verbindung |
+| `sitzungen.jsonl` | je Sitzung ein Eintrag mit dem Konto der Sitzung beim Start; geht nie an den Server; Einträge älter als 90 Tage fallen weg, höchstens 10 000 bleiben, auch ohne Verbindung |
 | `geliefert.json` | wie viele Zeilen jeder Datei schon beim Server sind; neues Koppeln setzt nur diese Datei zurück, dann geht das ganze Archiv noch einmal |
 
 Vor dem Senden prüft das Plugin jede Zeile selbst: Passt die Signatur nicht (etwa nach einer Änderung von Hand) oder verletzt die Zeile eine Grenze, geht sie nicht mit, und `/tokenlore:status` nennt die Zahl ausgesonderter Zeilen. Die übrigen gehen trotzdem raus.
@@ -134,18 +134,18 @@ Was sich in jeder Version ändert, steht in [CHANGELOG.md](CHANGELOG.md).
 | `/tokenlore:connect <https://server> <code> [--ca <fingerabdruck>] [--name <gerätename>]` | Gerät koppeln oder neu koppeln; ein [kopierter Ordner](#kopierter-konfigurationsordner) wird dabei ein eigenes Gerät |
 | `/tokenlore:sync` | sofort abgleichen |
 | `/tokenlore:status [--next] [--warnings]` | Verbindung und Abgleich zeigen, mit `--next` das nächste Paket, mit `--warnings` die Texte der Warnungen |
-| `/tokenlore:email [off\|short\|full]` | E-Mail-Stufe zeigen oder setzen |
+| `/tokenlore:email [off\|short\|full]` | E-Mail-Stufe wählen (Auswahlfenster) oder setzen |
 | `/tokenlore:disconnect` | Gerät trennen |
 
 ### Was beim Sitzungsstart passiert
 
 Das Plugin meldet bei Claude Code einen Hook an, der bei jedem Sitzungsstart läuft, **auch ohne Kopplung**:
 
-1. Er liest die Sitzungs-ID, die Claude Code ihm übergibt, und die Kontokennung des angemeldeten Kontos aus `~/.claude.json`, und hängt beide als eine Zeile an `sitzungen.jsonl` im Archivordner an (siehe [Archiv](#archiv)). Eine Sitzung gehört genau einem Konto; so behält sie es, auch wenn du dich danach mit einem anderen Konto anmeldest. Ohne Kennungsdatei (nie gekoppelt) schreibt er nichts.
+1. Er liest die Sitzungs-ID, die Claude Code ihm übergibt, und die Kontokennung der Sitzung: das Konto, das die Desktop-App übergibt, sonst das angemeldete Konto aus `~/.claude.json`. Beide hängt er als eine Zeile an `sitzungen.jsonl` im Archivordner an (siehe [Archiv](#archiv)). Eine Sitzung gehört genau einem Konto; so behält sie es, auch wenn du dich danach mit einem anderen Konto anmeldest. Ohne Kennungsdatei (nie gekoppelt) schreibt er nichts.
 2. Nur wenn das Gerät gekoppelt ist, startet er den Abgleich in einem abgekoppelten Prozess. Ohne Kopplung endet er nach Schritt 1, ohne Netzverkehr.
 3. Ist das Gerät gekoppelt und gibt es ein Problem, das du lösen musst, zeigt er eine Meldung, die mit „tokenlore:“ beginnt (siehe [Meldungen](#meldungen)).
 
-Das Konto einer Anfrage steht im Archiv. Hat ihre Sitzung dort schon ein Konto, gilt dieses; sonst `ownerAccountUuid` aus der Sitzungsdatei, sonst das Konto beim Sitzungsstart, sonst das beim Archivieren angemeldete Konto.
+Das Konto einer Anfrage steht im Archiv. Hat ihre Sitzung dort schon ein Konto, gilt dieses; sonst das Konto beim Sitzungsstart, sonst `ownerAccountUuid` aus der Sitzungsdatei, sonst das Konto der Sitzung, die archiviert. Das Konto beim Sitzungsstart geht vor, weil die Sitzungsdatei einer Desktop-Sitzung teils das Konto aus `~/.claude.json` nennt. Startet Claude in einer Desktop-Sitzung selbst `claude -p`, zählt diese Sitzung zum Konto der Desktop-App, auch wenn sie mit der Anmeldung aus `~/.claude.json` läuft.
 
 Claude Code wartet darauf nie (Notbremse 2 s, auch ohne Netz).
 

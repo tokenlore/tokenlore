@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"time"
 
 	"github.com/tokenlore/tokenlore/client"
@@ -43,6 +44,8 @@ func run(args []string) int {
 		fmt.Fprint(os.Stderr, usage)
 		return 2
 	}
+	// fromChat: Die Argumente kommen aus einem Slash-Befehl; was der Befehl ausgibt, liest Claude mit.
+	fromChat := len(args) > 1 && args[1] == argsFlag
 	switch args[0] {
 	case "connect", "disconnect", "sync", "status", "email":
 		rest, err := pluginArgs(args[1:])
@@ -63,7 +66,7 @@ func run(args []string) int {
 		if err != nil {
 			return 0 // der Sessionstart darf nie gestört werden
 		}
-		_ = runSessionStart(os.Stdin, dataDir, cfg, time.Now())
+		_ = runSessionStart(os.Stdin, dataDir, cfg, time.Now(), os.Getenv)
 		// Meldungen aus dem letzten Abgleich und zur Kennung; der neue Abgleich unten meldet sich erst beim nächsten Start.
 		writeSessionNotice(os.Stdout, dataDir, cfg)
 		// Der Abgleich läuft abgekoppelt: Claude Code wartet nie auf das Netz.
@@ -109,13 +112,21 @@ func run(args []string) int {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-		release, ok, err := deviceLock()
-		if err != nil || !ok {
-			fmt.Fprintln(os.Stderr, "Gerade läuft ein Abgleich. Bitte gleich noch einmal versuchen.")
-			return 1
+		// `--json` nennt die volle Adresse und ist nur für das Auswahlfenster, nie für die Ausgabe im Chat.
+		if fromChat && slices.Contains(args[1:], "--json") {
+			fmt.Fprintln(os.Stdout, "Unbekannte Stufe \"--json\". Erlaubt: off, short, full.")
+			return 2
 		}
-		defer release()
-		return runEmail(args[1:], os.Stdout, dataDir, claudecode.ClaudeJSONPath(cfg))
+		// Nur Setzen schreibt den Merkzettel und braucht die Sperre; Anzeigen läuft auch während eines Abgleichs.
+		if len(args) > 1 && args[1] != "--json" {
+			release, ok, err := deviceLock()
+			if err != nil || !ok {
+				fmt.Fprintln(os.Stderr, "Gerade läuft ein Abgleich. Bitte gleich noch einmal versuchen.")
+				return 1
+			}
+			defer release()
+		}
+		return runEmail(args[1:], os.Stdout, dataDir, claudecode.ClaudeJSONPath(cfg), os.Getenv)
 	case "scan":
 		dataDir, cfg, err := dirs()
 		if err != nil {

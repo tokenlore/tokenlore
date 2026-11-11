@@ -22,9 +22,12 @@ type ScanResult struct {
 	// HeldMonths sind die Monate (UTC, JJJJ-MM) der Anfragen, die noch nicht fertig sind und deshalb weder in Lines
 	// stehen; solche Monate packt das Archiv noch nicht.
 	HeldMonths []string
-	// CurrentAccountID und CurrentEmail sind das in Claude Code angemeldete Konto mit voller Adresse, leer wenn keins.
-	// Die Adresse gehört nur ins lokale Archiv (konten.jsonl), nie ungekürzt in ein Paket.
+	// CurrentAccountID und CurrentEmail sind das Konto der laufenden Sitzung mit voller Adresse, leer wenn keins: das
+	// der Desktop-App, sonst das aus .claude.json. Es gilt für Anfragen, deren Konto sonst unbekannt ist.
+	// OtherAccountID und OtherEmail sind das Konto aus .claude.json, wenn es ein anderes ist. Beide Adressen gehören
+	// nur ins lokale Archiv (konten.jsonl), nie ungekürzt in ein Paket.
 	CurrentAccountID, CurrentEmail string
+	OtherAccountID, OtherEmail     string
 	// IdentityChanged: Die Kennungsdatei passt nicht zur Kennung, mit der gekoppelt wurde. Geliefert wird dann gar
 	// nichts, bis neu gekoppelt ist (deliver.CheckDevice).
 	IdentityChanged bool

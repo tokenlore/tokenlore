@@ -193,8 +193,30 @@ func TestScanAccountEmptyWithoutOwner(t *testing.T) {
 	if len(res.Lines) != 1 || res.Lines[0].AccountID != "" {
 		t.Fatalf("Konto gesetzt: %+v", res.Lines)
 	}
-	if res.CurrentAccountID != "acc-jetzt" || res.CurrentEmail != "max@beispiel.de" {
-		t.Fatalf("angemeldetes Konto %q %q", res.CurrentAccountID, res.CurrentEmail)
+	if res.CurrentAccountID != "acc-jetzt" || res.CurrentEmail != "max@beispiel.de" || res.OtherAccountID != "" {
+		t.Fatalf("angemeldetes Konto %q %q, anderes %q", res.CurrentAccountID, res.CurrentEmail, res.OtherAccountID)
+	}
+}
+
+// Übergibt die Desktop-App ein Konto, ist es das Konto der Sitzung; das aus .claude.json kommt als anderes Konto mit.
+func TestScanAccountFromApp(t *testing.T) {
+	c, root := newScanEnv(t)
+	write(t, filepath.Join(root, ".claude.json"), `{"oauthAccount":{"accountUuid":"acc-terminal","emailAddress":"max@beispiel.de"}}`)
+	write(t, filepath.Join(root, "projects", "P", "s1.jsonl"), lineC+"\n")
+	env := map[string]string{EnvAccountID: "acc-app", EnvEmail: "erika@beispiel.de"}
+	c.Getenv = func(k string) string { return env[k] }
+	res, err := c.Scan(context.Background(), emptyState(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.CurrentAccountID != "acc-app" || res.CurrentEmail != "erika@beispiel.de" ||
+		res.OtherAccountID != "acc-terminal" || res.OtherEmail != "max@beispiel.de" {
+		t.Fatalf("Konten %+v", res)
+	}
+	// Dasselbe Konto in beiden Quellen kommt nur einmal.
+	env[EnvAccountID] = "acc-terminal"
+	if res, _ = c.Scan(context.Background(), emptyState(t)); res.CurrentAccountID != "acc-terminal" || res.OtherAccountID != "" {
+		t.Fatalf("doppelt: %+v", res)
 	}
 }
 

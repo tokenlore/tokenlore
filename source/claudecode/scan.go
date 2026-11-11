@@ -37,6 +37,8 @@ type ClaudeCode struct {
 	// Ended sind die Hauptdateien beendeter Sitzungen (relativ zu ConfigDir, mit /, wie EndedRel sie liefert): Ihre
 	// letzte Anfrage und die ihrer Subagenten gelten sofort als fertig (Hook SessionEnd).
 	Ended []string
+	// Getenv liest Umgebungsvariablen (das Konto, das die Desktop-App übergibt); nil heißt os.Getenv.
+	Getenv func(string) string
 }
 
 // EndedRel macht aus dem Protokollnamen, den der Hook SessionEnd nennt (transcript_path), den Namen der Hauptdatei
@@ -94,12 +96,24 @@ func (c *ClaudeCode) Scan(ctx context.Context, st *state.State) (source.ScanResu
 	held := map[string]bool{}
 	// owners: Konto je Sitzung aus ownerAccountUuid, über alle Dateien dieses Laufs (Hauptdatei und Subagenten).
 	owners := map[string]string{}
-	cur, curOK, curErr := ReadCurrentAccount(ClaudeJSONPath(c.ConfigDir))
-	if curOK && protocol.IDPattern.MatchString(cur.AccountID) {
-		res.CurrentAccountID, res.CurrentEmail = cur.AccountID, cur.Email
+	getenv := c.Getenv
+	if getenv == nil {
+		getenv = os.Getenv
 	}
-	if curErr != nil {
-		res.Warnings = append(res.Warnings, fmt.Sprintf("angemeldetes Konto nicht lesbar: %v", curErr))
+	app, appOK := AppAccount(getenv)
+	login, loginOK, loginErr := ReadCurrentAccount(ClaudeJSONPath(c.ConfigDir))
+	loginOK = loginOK && protocol.IDPattern.MatchString(login.AccountID)
+	switch {
+	case appOK:
+		res.CurrentAccountID, res.CurrentEmail = app.AccountID, app.Email
+		if loginOK && login.AccountID != app.AccountID {
+			res.OtherAccountID, res.OtherEmail = login.AccountID, login.Email
+		}
+	case loginOK:
+		res.CurrentAccountID, res.CurrentEmail = login.AccountID, login.Email
+	}
+	if loginErr != nil {
+		res.Warnings = append(res.Warnings, fmt.Sprintf("angemeldetes Konto nicht lesbar: %v", loginErr))
 	}
 	for _, f := range files {
 		if err := ctx.Err(); err != nil {

@@ -487,7 +487,8 @@ func TestAddRequestsAccountFromSessionOrFallback(t *testing.T) {
 }
 
 // Konto vom Sitzungsstart: Wechselt das angemeldete Konto nach dem Start, bevor die erste Anfrage archiviert ist,
-// bleibt die Sitzung beim Startkonto. ownerAccountUuid geht vor; fehlt die Datei, gilt wie bisher das angemeldete Konto.
+// bleibt die Sitzung beim Startkonto. Das Startkonto geht ownerAccountUuid vor (Desktop-App: die Sitzungsdatei nennt
+// teils das Konto aus .claude.json); ohne Startkonto gilt ownerAccountUuid, ohne beides das Konto der Sitzung.
 // Hat die Sitzung schon ein Konto im Archiv, gilt es für jede weitere Zeile, auch gegen ein anderes ownerAccountUuid.
 func TestAddRequestsAccountFromSessionStart(t *testing.T) {
 	dir := newDir(t)
@@ -505,7 +506,7 @@ func TestAddRequestsAccountFromSessionStart(t *testing.T) {
 	}
 	a := open(t, dir, nov6)
 	if _, err := a.AddRequests([]protocol.RequestLine{
-		l("m1", "s-start", ""), l("m2", "s-owner", "acc-owner"), l("m3", "s-ohne", ""),
+		l("m1", "s-start", ""), l("m2", "s-owner", "acc-owner"), l("m3", "s-ohne", ""), l("m6", "s-nurowner", "acc-owner"),
 	}, "acc-jetzt"); err != nil {
 		t.Fatal(err)
 	}
@@ -519,7 +520,7 @@ func TestAddRequestsAccountFromSessionStart(t *testing.T) {
 		json.Unmarshal([]byte(h.Z), &k)
 		got[k.MessageID] = k.AccountID
 	}
-	want := map[string]string{"m1": "acc-start", "m2": "acc-owner", "m3": "acc-jetzt", "m4": "acc-owner", "m5": "acc-start"}
+	want := map[string]string{"m1": "acc-start", "m2": "acc-start", "m3": "acc-jetzt", "m4": "acc-start", "m5": "acc-start", "m6": "acc-owner"}
 	for m, acc := range want {
 		if got[m] != acc {
 			t.Errorf("%s: Konto %q, want %q", m, got[m], acc)

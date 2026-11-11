@@ -101,6 +101,22 @@ func setMtime(t *testing.T, p string, m time.Time) {
 }
 
 // Der Abgleich legt das Archiv an: signierte Hüllen, Konten, Vorgeschichte, Merker archiv_angelegt, Rechte.
+// Übergibt die Desktop-App ein Konto, kommen beide Konten mit ihrer Adresse in konten.jsonl: das der App und das aus
+// .claude.json.
+func TestRunFillsArchiveBothAccounts(t *testing.T) {
+	cfg, data := env(t, map[string][]byte{"s1.jsonl": manyRequests(1)})
+	os.WriteFile(filepath.Join(cfg, ".claude.json"), []byte(`{"oauthAccount":{"accountUuid":"acc-1","emailAddress":"erika@beispiel.de"}}`), 0o600)
+	t.Setenv("CLAUDE_CODE_ACCOUNT_UUID", "acc-app")
+	t.Setenv("CLAUDE_CODE_USER_EMAIL", "max@beispiel.de")
+	runAt(t, cfg, data, fixedNow)
+
+	accs, err := archive.ReadAccounts(archDir(data))
+	want := []archive.Account{{AccountID: "acc-1", Email: "erika@beispiel.de"}, {AccountID: "acc-app", Email: "max@beispiel.de"}}
+	if err != nil || len(accs) != 2 || accs[0] != want[0] || accs[1] != want[1] {
+		t.Fatalf("Konten %+v %v", accs, err)
+	}
+}
+
 func TestRunFillsArchive(t *testing.T) {
 	cfg, data := env(t, map[string][]byte{"s1.jsonl": manyRequests(3)})
 	os.WriteFile(filepath.Join(cfg, ".claude.json"), []byte(`{"oauthAccount":{"accountUuid":"acc-1","emailAddress":"erika@beispiel.de"}}`), 0o600)

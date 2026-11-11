@@ -47,12 +47,14 @@ func readHookInput(stdin io.Reader) (hookInput, bool) {
 // ownerAccountUuid, auch wenn danach ein anderes Konto angemeldet wird. Ohne Kennung (nie gekoppelt) gibt es kein
 // Archiv und nichts zu tun. Fehlende, kaputte oder hängende Eingaben sind kein Fehler: der Sessionstart darf nie
 // gestört werden.
-func runSessionStart(stdin io.Reader, dataDir, configDir string, now time.Time) error {
+//
+// Das Konto ist das, das die Desktop-App der Sitzung übergibt, sonst das aus .claude.json (claudecode.SessionAccount).
+func runSessionStart(stdin io.Reader, dataDir, configDir string, now time.Time, getenv func(string) string) error {
 	in, ok := readHookInput(stdin)
 	if !ok || !protocol.IDPattern.MatchString(in.SessionID) {
 		return nil
 	}
-	acc, ok, err := claudecode.ReadCurrentAccount(claudecode.ClaudeJSONPath(configDir))
+	acc, ok, err := claudecode.SessionAccount(claudecode.ClaudeJSONPath(configDir), getenv)
 	if err != nil || !ok || !protocol.IDPattern.MatchString(acc.AccountID) {
 		return nil
 	}

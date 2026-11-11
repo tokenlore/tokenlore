@@ -35,7 +35,7 @@ func readStarts(t *testing.T, data, id string) string {
 // Der Sessionstart hält Sitzung und angemeldetes Konto im Archivordner fest.
 func TestSessionStartRecords(t *testing.T) {
 	data, cfg := t.TempDir(), sessionCfg(t, fixedID)
-	if err := runSessionStart(strings.NewReader(`{"session_id":"s9","hook_event_name":"SessionStart"}`), data, cfg, time.Now()); err != nil {
+	if err := runSessionStart(strings.NewReader(`{"session_id":"s9","hook_event_name":"SessionStart"}`), data, cfg, time.Now(), noEnv); err != nil {
 		t.Fatal(err)
 	}
 	if got := readStarts(t, data, fixedID); !strings.Contains(got, `"session_id":"s9","account_id":"acc-9"`) {
@@ -46,7 +46,7 @@ func TestSessionStartRecords(t *testing.T) {
 	}
 	// Fortgesetzte Sitzung (gleiche session_id, etwa nach /resume oder /clear): kein zweiter Eintrag, auch ohne Kopplung.
 	for range 3 {
-		runSessionStart(strings.NewReader(`{"session_id":"s9"}`), data, cfg, time.Now())
+		runSessionStart(strings.NewReader(`{"session_id":"s9"}`), data, cfg, time.Now(), noEnv)
 	}
 	if got := readStarts(t, data, fixedID); strings.Count(got, "\n") != 1 {
 		t.Fatalf("sitzungen.jsonl mit mehreren Einträgen je Sitzung: %q", got)
@@ -57,18 +57,18 @@ func TestSessionStartRecords(t *testing.T) {
 // Fehlt nur die Kennungsdatei, gilt die Kopie im Merkzettel.
 func TestSessionStartWithoutIdentityOrAccount(t *testing.T) {
 	data, cfg := t.TempDir(), sessionCfg(t, "")
-	runSessionStart(strings.NewReader(`{"session_id":"s9"}`), data, cfg, time.Now())
+	runSessionStart(strings.NewReader(`{"session_id":"s9"}`), data, cfg, time.Now(), noEnv)
 	if _, err := os.Stat(filepath.Join(data, "archiv")); !os.IsNotExist(err) {
 		t.Fatal("ohne Kennung ein Archiv angelegt")
 	}
 	st, _ := state.Load(data)
 	st.Identity = &state.Identity{ID: fixedID}
 	st.Save(data)
-	if err := runSessionStart(strings.NewReader(`{"session_id":"s9"}`), data, cfg, time.Now()); err != nil || readStarts(t, data, fixedID) == "" {
+	if err := runSessionStart(strings.NewReader(`{"session_id":"s9"}`), data, cfg, time.Now(), noEnv); err != nil || readStarts(t, data, fixedID) == "" {
 		t.Fatalf("Kopie der Kennung nicht genutzt: %v", err)
 	}
 	data2 := t.TempDir()
-	runSessionStart(strings.NewReader(`{"session_id":"s9"}`), data2, sessionCfgNoAccount(t), time.Now())
+	runSessionStart(strings.NewReader(`{"session_id":"s9"}`), data2, sessionCfgNoAccount(t), time.Now(), noEnv)
 	if _, err := os.Stat(filepath.Join(data2, "archiv")); !os.IsNotExist(err) {
 		t.Fatal("ohne Konto geschrieben")
 	}
@@ -82,15 +82,15 @@ func sessionCfgNoAccount(t *testing.T) string {
 }
 
 func TestSessionStartBadStdin(t *testing.T) {
-	if err := runSessionStart(strings.NewReader(`kaputt`), t.TempDir(), t.TempDir(), time.Now()); err != nil {
+	if err := runSessionStart(strings.NewReader(`kaputt`), t.TempDir(), t.TempDir(), time.Now(), noEnv); err != nil {
 		t.Fatalf("kaputte Eingabe darf den Sessionstart nicht stören: %v", err)
 	}
 }
 
 func TestSessionStartRejectsOddSessionID(t *testing.T) {
 	data, cfg := t.TempDir(), sessionCfg(t, fixedID)
-	runSessionStart(strings.NewReader(`{"session_id":"`+strings.Repeat("a", 5000)+`"}`), data, cfg, time.Now())
-	runSessionStart(strings.NewReader(`{"session_id":"a\nb"}`), data, cfg, time.Now())
+	runSessionStart(strings.NewReader(`{"session_id":"`+strings.Repeat("a", 5000)+`"}`), data, cfg, time.Now(), noEnv)
+	runSessionStart(strings.NewReader(`{"session_id":"a\nb"}`), data, cfg, time.Now(), noEnv)
 	if got := readStarts(t, data, fixedID); got != "" {
 		t.Fatalf("ungültige session_id gespeichert: %q", got)
 	}
@@ -102,7 +102,7 @@ func TestSessionStartNeverHangsOnOpenStdin(t *testing.T) {
 	go w.Write([]byte(`{"session_id":"s1"`)) // unvollständig, stdin wird nie geschlossen
 	start := time.Now()
 	done := make(chan struct{})
-	go func() { runSessionStart(r, t.TempDir(), t.TempDir(), time.Now()); close(done) }()
+	go func() { runSessionStart(r, t.TempDir(), t.TempDir(), time.Now(), noEnv); close(done) }()
 	select {
 	case <-done:
 		if d := time.Since(start); d > sessionStartBudget+200*time.Millisecond {

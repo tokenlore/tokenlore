@@ -394,27 +394,29 @@ func (a *Archive) AddRequests(lines []protocol.RequestLine, fallback string) (Ad
 }
 
 // fillAccount setzt das Konto einer Zeile des Monats m. Eine Sitzung hat genau ein Konto: Steht sie schon mit
-// Konto im Archiv (dieser und der Vormonat), gilt dieses. Sonst gilt ownerAccountUuid aus dem Protokoll (schon in
-// l.AccountID), sonst das Konto beim Sitzungsstart aus sitzungen.jsonl, sonst fallback, das angemeldete Konto.
+// Konto im Archiv (dieser und der Vormonat), gilt dieses. Sonst gilt das Konto beim Sitzungsstart aus sitzungen.jsonl,
+// sonst ownerAccountUuid aus dem Protokoll (schon in l.AccountID), sonst fallback, das Konto der laufenden Sitzung.
 func (a *Archive) fillAccount(l *protocol.RequestLine, m, fallback string) error {
 	acc, err := a.sessionAccount(l.SessionID, m)
 	if err != nil {
 		return err
 	}
-	switch {
-	case acc != "":
+	if acc != "" {
 		l.AccountID = acc
+		return nil
+	}
+	// Das Konto beim Sitzungsstart geht vor ownerAccountUuid: In Sitzungen der Desktop-App nennt die Sitzungsdatei
+	// teils das Konto aus .claude.json statt des Kontos, mit dem die App die Sitzung führt.
+	start, err := a.startAccount(l.SessionID)
+	if err != nil {
+		return err
+	}
+	switch {
+	case start != "":
+		l.AccountID = start
 	case l.AccountID != "":
-	default:
-		start, err := a.startAccount(l.SessionID)
-		if err != nil {
-			return err
-		}
-		if start != "" {
-			l.AccountID = start
-		} else if protocol.IDPattern.MatchString(fallback) {
-			l.AccountID = fallback
-		}
+	case protocol.IDPattern.MatchString(fallback):
+		l.AccountID = fallback
 	}
 	return nil
 }

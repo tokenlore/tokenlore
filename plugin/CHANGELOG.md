@@ -4,6 +4,20 @@ Was sich am Plugin für dich ändert. Format nach [Keep a Changelog](https://kee
 
 ## Unveröffentlicht
 
+## 0.7.0 – 2026-11-11
+
+### Neu
+
+- `/tokenlore:email` öffnet ein Auswahlfenster mit Aus, Kurz und Voll. Es zeigt die Adresse deines Kontos, ohne dass Claude sie liest. Überspringst du die Frage, bleibt alles, wie es war.
+
+### Geändert
+
+- `/tokenlore:email` schreibt keine Adresse mehr in den Chat.
+
+### Behoben
+
+- Arbeitest du in der Desktop-App mit einem anderen Konto als im Terminal, ordnet tokenlore jede Sitzung dem richtigen Konto zu, und jedes Konto bekommt seine eigene Adresse. Sitzungen, die schon im Archiv stehen, bleiben, wie sie sind.
+
 ## 0.6.0 – 2026-11-09
 
 ### Neu

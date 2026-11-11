@@ -58,6 +58,11 @@ func fillArchive(dir string, key ed25519.PrivateKey, now func() time.Time, confi
 	if err := a.AddAccounts(r.Accounts, res.CurrentAccountID, res.CurrentEmail); err != nil {
 		return nil, fmt.Errorf("%s: %w", archive.AccountsFile, err)
 	}
+	if res.OtherAccountID != "" {
+		if err := a.AddAccounts(nil, res.OtherAccountID, res.OtherEmail); err != nil {
+			return nil, fmt.Errorf("%s: %w", archive.AccountsFile, err)
+		}
+	}
 	if !a.LegacyDone() {
 		days, err := claudecode.LegacyDays(configDir)
 		if err != nil {
