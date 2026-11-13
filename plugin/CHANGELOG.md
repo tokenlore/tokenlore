@@ -4,6 +4,12 @@ Was sich am Plugin für dich ändert. Format nach [Keep a Changelog](https://kee
 
 ## Unveröffentlicht
 
+## 0.9.1 – 2026-11-13
+
+### Geändert
+
+- `/tokenlore:status` nennt unter „Neue Felder in den Sitzungsdateien“ keine Felder mehr, die das Plugin nach einem Update liest oder absichtlich auslässt. <!-- doku-ok: Chronik -->
+
 ## 0.9.0 – 2026-11-13
 
 ### Neu

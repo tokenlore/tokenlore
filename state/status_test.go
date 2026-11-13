@@ -34,14 +34,28 @@ func TestStatusMissingIsEmpty(t *testing.T) {
 	}
 }
 
+func none(string) bool { return false }
+
+func TestStatusAddNewFieldsDropsKnown(t *testing.T) {
+	s := &Status{NewFields: []string{"alt", "jetztGelesen"}}
+	s.AddNewFields([]string{"neu"}, func(n string) bool { return n == "jetztGelesen" })
+	if fmt.Sprint(s.NewFields) != "[alt neu]" {
+		t.Fatalf("Namen %q", s.NewFields)
+	}
+	s.AddNewFields(nil, func(string) bool { return true })
+	if s.NewFields != nil {
+		t.Fatalf("alle bekannt: %q", s.NewFields)
+	}
+}
+
 func TestStatusAddNewFields(t *testing.T) {
 	s := &Status{}
-	s.AddNewFields(nil)
+	s.AddNewFields(nil, none)
 	if s.NewFields != nil {
 		t.Fatalf("leer: %q", s.NewFields)
 	}
-	s.AddNewFields([]string{"neu", "alt"})
-	s.AddNewFields([]string{"alt", "mitte"})
+	s.AddNewFields([]string{"neu", "alt"}, none)
+	s.AddNewFields([]string{"alt", "mitte"}, none)
 	if fmt.Sprint(s.NewFields) != "[alt mitte neu]" {
 		t.Fatalf("Namen %q", s.NewFields)
 	}
@@ -49,7 +63,7 @@ func TestStatusAddNewFields(t *testing.T) {
 	for i := 0; i < MaxNewFields+5; i++ {
 		many = append(many, fmt.Sprintf("f%02d", i))
 	}
-	s.AddNewFields(many)
+	s.AddNewFields(many, none)
 	if len(s.NewFields) != MaxNewFields || s.NewFields[0] != "alt" {
 		t.Fatalf("%d Namen, erster %q", len(s.NewFields), s.NewFields[0])
 	}

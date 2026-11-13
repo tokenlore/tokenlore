@@ -13,6 +13,7 @@ import (
 	"github.com/tokenlore/tokenlore/client"
 	"github.com/tokenlore/tokenlore/protocol"
 	"github.com/tokenlore/tokenlore/source"
+	"github.com/tokenlore/tokenlore/source/claudecode"
 	"github.com/tokenlore/tokenlore/state"
 )
 
@@ -155,7 +156,7 @@ func Run(ctx context.Context, d Deps) (Report, error) {
 	// Dateinamen in Warnungen stammen von der Platte und könnten Terminal-Escapes enthalten.
 	warnings := res.Warnings
 	// Neue Felder bleiben gemerkt, auch wenn ihre Zeilen schon geliefert sind; nur Namen, nie Werte.
-	stat.AddNewFields(res.NewFields)
+	stat.AddNewFields(res.NewFields, claudecode.KnownField)
 	if err != nil {
 		stat.Warnings = cleanAll(lastN(warnings, 20))
 		return fail(err)

@@ -167,3 +167,19 @@ func TestFieldListsDisjoint(t *testing.T) {
 		t.Error("message.content nicht gesperrt")
 	}
 }
+
+func TestKnownField(t *testing.T) {
+	for name, want := range map[string]bool{
+		"promptCacheRequested":        true,  // gelesen
+		"failedResponseHadNoToolCall": true,  // bekannt, nicht übernommen
+		"cwd":                         true,  // gesperrt
+		"message.diagnostics":         true,  // gelesen
+		"message.content":             true,  // gesperrt
+		"ganzNeu":                     false, // neu
+		"message.ganzNeu":             false,
+	} {
+		if got := KnownField(name); got != want {
+			t.Errorf("KnownField(%q) = %v, erwartet %v", name, got, want)
+		}
+	}
+}

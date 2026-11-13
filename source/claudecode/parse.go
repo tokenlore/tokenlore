@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/tokenlore/tokenlore/protocol"
@@ -243,6 +244,15 @@ func parseLine(b []byte) (line, error) {
 		l.NewFields = newFields(b)
 	}
 	return l, nil
+}
+
+// KnownField meldet, ob ein Name, wie newFields ihn liefert, bekannt oder gesperrt ist; so fallen Namen weg, die eine
+// ältere Version als neu gemerkt hat.
+func KnownField(name string) bool {
+	if k, ok := strings.CutPrefix(name, "message."); ok {
+		return knownMessage[k] || blockedMessage[k]
+	}
+	return knownTop[name] || blockedTop[name]
 }
 
 // newFields liefert die Namen der Schlüssel einer Anfragezeile, die weder bekannt noch gesperrt sind, sortiert.

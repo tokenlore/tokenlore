@@ -12,6 +12,7 @@ import (
 	"github.com/tokenlore/tokenlore/client"
 	"github.com/tokenlore/tokenlore/deliver"
 	"github.com/tokenlore/tokenlore/secret"
+	"github.com/tokenlore/tokenlore/source/claudecode"
 	"github.com/tokenlore/tokenlore/state"
 )
 
@@ -98,7 +99,7 @@ func runStatus(args []string, out io.Writer, dataDir, configDir string) int {
 	}
 	res, err := deliver.Prepare(context.Background(), configDir, paired, st, time.Now)
 	// Neue Felder aus den bisherigen Abgleichen und aus dem, was jetzt offen ist; nur Namen, nie Werte.
-	stat.AddNewFields(res.NewFields)
+	stat.AddNewFields(res.NewFields, claudecode.KnownField)
 	if len(stat.NewFields) > 0 {
 		fmt.Fprintf(out, "Neue Felder in den Sitzungsdateien (nicht übernommen): %s\n", client.Clean(strings.Join(stat.NewFields, ", ")))
 	}

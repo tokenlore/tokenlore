@@ -26,7 +26,7 @@ Bitte vor dem Koppeln lesen. Die Feldliste mit allen Grenzen steht in [`PROTOCOL
 
 **Was das Gerät nie Richtung tokenlore-Server verlässt:** Nachrichteninhalte, Werkzeug-Eingaben und -Ausgaben, Dateipfade, Projektnamen, eine Projekt-Kennung, Git-Zweige, Arbeitsordner, der Name aus dem Claude-Konto, der private Signaturschlüssel. Warnungen des Plugins (sie können Pfade und Projektordner enthalten) gehen nie an den Server.
 
-**Neue Felder in den Sitzungsdateien:** Das Plugin übernimmt nur Felder einer festen Liste. Taucht in den Sitzungsdateien ein neues Feld auf, nimmt es das Feld nicht auf und nennt nur seinen Namen in `/tokenlore:status`.
+**Neue Felder in den Sitzungsdateien:** Das Plugin übernimmt nur Felder einer festen Liste. Taucht in den Sitzungsdateien ein neues Feld auf, nimmt es das Feld nicht auf und nennt nur seinen Namen in `/tokenlore:status`, bis eine Version des Plugins das Feld kennt.
 
 **Signatur:** Jede Zeile im Archiv trägt eine Ed25519-Signatur mit dem Signaturschlüssel dieses Rechners. Der Server nimmt nur Zeilen an, deren Signatur zu einem Schlüssel passt, den dieses Gerät beim Koppeln gemeldet hat, und speichert die Signatur mit. Eine kopierte oder nachträglich geänderte Zeile kommt so nicht an. Der private Schlüssel bleibt auf dem Rechner (siehe [Ablage und Schlüssel](#ablage-und-schlüssel)). Wer an deinem Rechner deinen Schlüssel auslesen kann, kann damit auch eigene Zeilen signieren: Die Signatur schützt vor Kopien und Versehen, nicht vor Absicht.
 

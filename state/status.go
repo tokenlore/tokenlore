@@ -51,9 +51,10 @@ type Status struct {
 // MaxNewFields ist die Höchstzahl gemerkter Namen neuer Felder.
 const MaxNewFields = 32
 
-// AddNewFields nimmt Namen neuer Felder in NewFields auf: ohne Doppelte, sortiert, höchstens MaxNewFields.
-func (s *Status) AddNewFields(names []string) {
-	all := append(slices.Clone(s.NewFields), names...)
+// AddNewFields nimmt Namen neuer Felder in NewFields auf: ohne Doppelte, sortiert, höchstens MaxNewFields. Gemerkte
+// Namen, die known kennt, fallen weg: Diese Version liest sie oder lässt sie absichtlich aus.
+func (s *Status) AddNewFields(names []string, known func(string) bool) {
+	all := append(slices.DeleteFunc(slices.Clone(s.NewFields), known), names...)
 	slices.Sort(all)
 	all = slices.Compact(all)
 	if len(all) > MaxNewFields {
