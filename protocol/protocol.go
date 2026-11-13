@@ -51,6 +51,7 @@ type Session struct {
 const (
 	KindRequest = "request"
 	KindDay     = "day"
+	KindError   = "error"
 )
 
 // RequestLine ist die Inhaltszeile einer Anfrage im Archiv (protocol/doc.md, „Inhaltszeile: Anfrage“). Sie enthält
@@ -74,5 +75,38 @@ type RequestLine struct {
 	Subagent       bool           `json:"subagent"`
 	Tools          map[string]int `json:"tools,omitempty"`
 	AccountID      string         `json:"account_id,omitempty"`
-	Usage          map[string]any `json:"usage"`
+	// Felder, die das Merkmal request_details des Servers brauchen (NeedsRequestDetails). Zahlen sind Zeiger,
+	// damit 0 von „fehlt“ verschieden bleibt.
+	PromptCacheRequested string         `json:"prompt_cache_requested,omitempty"`
+	ToolInputStreamMs    *int64         `json:"tool_input_stream_ms,omitempty"`
+	ThinkingDurationMs   *int64         `json:"thinking_duration_ms,omitempty"`
+	AttributionPlugin    string         `json:"attribution_plugin,omitempty"`
+	AttributionAgent     string         `json:"attribution_agent,omitempty"`
+	CacheMissReason      string         `json:"cache_miss_reason,omitempty"`
+	Usage                map[string]any `json:"usage"`
+}
+
+// ErrorLine ist die Inhaltszeile eines API-Fehlers im Archiv (protocol/doc.md, „Inhaltszeile: Fehler“): nur feste
+// Werte und Zahlen, nie der Fehlertext. Optionale Felder fehlen ganz; Zahlen und is_using_overage sind Zeiger, damit
+// 0 und false von „fehlt“ verschieden bleiben. Eine Fehlerzeile braucht das Merkmal request_details des Servers.
+type ErrorLine struct {
+	Kind           string    `json:"kind"`
+	RequestID      string    `json:"request_id"`
+	MessageID      string    `json:"message_id"`
+	SessionID      string    `json:"session_id"`
+	UUID           string    `json:"uuid,omitempty"`
+	ParentUUID     string    `json:"parent_uuid,omitempty"`
+	TS             time.Time `json:"ts"` // immer UTC
+	UTCOffsetMin   int       `json:"utc_offset_min"`
+	Entrypoint     string    `json:"entrypoint,omitempty"`
+	CCVersion      string    `json:"cc_version,omitempty"`
+	Subagent       bool      `json:"subagent"`
+	AccountID      string    `json:"account_id,omitempty"`
+	APIErrorStatus *int64    `json:"api_error_status,omitempty"`
+	Error          string    `json:"error,omitempty"`
+	RateLimitType  string    `json:"rate_limit_type,omitempty"`
+	LimitStatus    string    `json:"limit_status,omitempty"`
+	OverageStatus  string    `json:"overage_status,omitempty"`
+	IsUsingOverage *bool     `json:"is_using_overage,omitempty"`
+	ResetsAt       *int64    `json:"resets_at,omitempty"`
 }

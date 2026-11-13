@@ -156,6 +156,9 @@ func printSyncResult(w io.Writer, rep deliver.Report, lead, doneLead string) {
 		if rep.Foreign > 0 {
 			fmt.Fprintf(w, "Hinweis: %s\n", deliver.ForeignMessage(rep.Foreign))
 		}
+		if rep.Held {
+			fmt.Fprintf(w, "Hinweis: %s\n", deliver.MsgHeldForServer)
+		}
 		return
 	}
 	fmt.Fprintf(w, "%s%s.", doneLead, requestsInParts(rep.Requests, rep.Parts))
@@ -172,7 +175,7 @@ func printSyncResult(w io.Writer, rep deliver.Report, lead, doneLead string) {
 	if rep.Foreign > 0 {
 		fmt.Fprintf(w, "Hinweis: %s\n", deliver.ForeignMessage(rep.Foreign))
 	}
-	for _, n := range deliver.Notices(&state.Status{LastKnown: rep.Known, LastElsewhere: rep.Elsewhere, LastLegacyRejected: rep.LegacyRejected}) {
+	for _, n := range deliver.Notices(&state.Status{LastKnown: rep.Known, LastElsewhere: rep.Elsewhere, LastLegacyRejected: rep.LegacyRejected, HeldForServer: rep.Held}) {
 		fmt.Fprintf(w, "Hinweis: %s\n", n)
 	}
 }

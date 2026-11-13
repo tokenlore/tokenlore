@@ -22,6 +22,11 @@ export function text(r: { stdout: string; stderr: string }): string {
   return [r.stdout.trim(), r.stderr.trim()].filter(s => s !== '').join('\n')
 }
 
+// firstLine ist die erste Zeile von stderr, sonst von stdout: die Fehlermeldung eines Programms.
+export function firstLine(r: { stdout: string; stderr: string }): string {
+  return (r.stderr.trim() || r.stdout.trim()).split('\n')[0] ?? ''
+}
+
 // runDirect führt `tokenlore <command> --args <args>` aus und gibt die Ausgabe als Text zurück. Lief das Programm
 // nicht zu Ende, sagt die Meldung das, statt den Befehl ein zweites Mal über die Befehlsdatei zu starten.
 export async function runDirect($: any, command: string, args: string): Promise<{ text: string }> {

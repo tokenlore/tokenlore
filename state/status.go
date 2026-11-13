@@ -38,6 +38,9 @@ type Status struct {
 	LastKnown          int `json:"last_known,omitempty"`
 	LastElsewhere      int `json:"last_elsewhere,omitempty"`
 	LastLegacyRejected int `json:"last_legacy_rejected,omitempty"`
+	// HeldForServer: Der letzte erfolgreiche Abgleich hat vor Zeilen angehalten, die der Server noch nicht annimmt
+	// (ihm fehlt das Merkmal request_details); sie warten im Archiv.
+	HeldForServer bool `json:"held_for_server,omitempty"`
 	// NewFields sind die Namen neuer Felder, die in den Sitzungsdateien aufgetaucht sind und die das Plugin nicht
 	// übernimmt (nie ihre Werte), gesammelt über alle Abgleiche, sortiert, höchstens MaxNewFields.
 	NewFields []string `json:"new_fields,omitempty"`

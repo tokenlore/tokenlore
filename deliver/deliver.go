@@ -56,6 +56,7 @@ func IsOutdatedMessage(s string) bool {
 // Sender liefert ein fertiges Paket aus (in Betrieb *client.Client).
 type Sender interface {
 	Ingest(ctx context.Context, key string, body []byte) (client.IngestResult, error)
+	Info(ctx context.Context) (client.ServerInfo, error)
 }
 
 // Deps sind die Abhängigkeiten eines Abgleichs. Now und Sleep sind für Tests austauschbar;
@@ -81,6 +82,8 @@ type Deps struct {
 type Report struct {
 	Parts, Requests, Days, Flagged, Warnings int
 	NothingNew                               bool
+	// Held: Die Lieferung hat vor der ersten Zeile angehalten, die der Server ohne Merkmal request_details ablehnte.
+	Held bool
 	// Known zählt die gelieferten Anfragen, die der Server schon hatte; Elsewhere die, die schon einem anderen
 	// Benutzer gehören; LegacyRejected die Tage, die der Server in diesem Abgleich neu abgewiesen hat; Damaged die
 	// Archivzeilen, die dieser Abgleich als beschädigt ausgesondert hat; Foreign die, die er ausgesondert hat, weil der
@@ -184,8 +187,21 @@ func Run(ctx context.Context, d Deps) (Report, error) {
 	// sich der Abgleich den Schlüssel, baut die Lieferung aus dem Rest neu und versucht es noch einmal. Jeder Durchgang
 	// sondert einen weiteren früheren Schlüssel aus, also gibt es höchstens so viele Durchgänge wie frühere Schlüssel.
 	foreignBase := -1
+	// Ob der Server die neueren Felder und Fehlerzeilen annimmt, fragt der Abgleich höchstens einmal und nur, wenn eine
+	// offene Zeile sie hat.
+	var details *bool
+	hasDetails := func() (bool, error) {
+		if details == nil {
+			info, err := d.Sender.Info(ctx)
+			if err != nil {
+				return false, err
+			}
+			details = new(info.Has(client.FeatureRequestDetails))
+		}
+		return *details, nil
+	}
 	for round := 0; ; round++ {
-		dl, warns, err := PrepareDelivery(dir, res.Next, d.Version, now())
+		dl, warns, err := PrepareDelivery(dir, res.Next, d.Version, now(), hasDetails)
 		warnings = append(warnings, warns...)
 		stat.Warnings = cleanAll(lastN(warnings, 20))
 		rep.Warnings = len(warnings)
@@ -201,7 +217,7 @@ func Run(ctx context.Context, d Deps) (Report, error) {
 				return fail(fmt.Errorf("%s nicht gespeichert: %w", archive.DeliveredFile, err))
 			}
 			rep.NothingNew = rep.Parts == 0
-			rep.Foreign = dl.done.Foreign - foreignBase
+			rep.Foreign, rep.Held = dl.done.Foreign-foreignBase, dl.Held
 			succeed(stat, rep)
 			_ = stat.Save(d.DataDir)
 			return rep, nil
@@ -240,7 +256,7 @@ func Run(ctx context.Context, d Deps) (Report, error) {
 		if retry {
 			continue
 		}
-		rep.Foreign = dl.done.Foreign - foreignBase
+		rep.Foreign, rep.Held = dl.done.Foreign-foreignBase, dl.Held
 		succeed(stat, rep)
 		_ = stat.Save(d.DataDir)
 		return rep, nil
@@ -268,10 +284,10 @@ func foreignKey(err error, p protocol.Batch, st *state.State) string {
 	return k
 }
 
-// NothingNew meldet, ob ein Abgleich nichts zu senden hätte: kein neu eingelesene Anfrage und nichts Offenes im
-// Archiv. status nutzt dieselbe Regel wie Run.
+// NothingNew meldet, ob ein Abgleich nichts zu senden hätte: keine neu eingelesene Anfrage oder Fehlerzeile und
+// nichts Offenes im Archiv. status nutzt dieselbe Regel wie Run.
 func NothingNew(res source.ScanResult, dl *Delivery) bool {
-	return len(res.Lines) == 0 && dl != nil && dl.NothingNew
+	return len(res.Lines) == 0 && len(res.Errors) == 0 && dl != nil && dl.NothingNew
 }
 
 // send liefert ein Paket; bei 429/503 wartet es die vom Server genannte Zeit und versucht es bis zu
@@ -296,6 +312,7 @@ func succeed(stat *state.Status, rep Report) {
 	stat.KeyRejected = ""
 	stat.LastRequests, stat.LastParts, stat.Flagged = rep.Requests, rep.Parts, rep.Flagged
 	stat.LastKnown, stat.LastElsewhere, stat.LastLegacyRejected = rep.Known, rep.Elsewhere, rep.LegacyRejected
+	stat.HeldForServer = rep.Held
 }
 
 // message macht aus einem Fehler einen deutschen Text für Status und Ausgabe: ohne Steuerzeichen,

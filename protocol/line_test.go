@@ -36,16 +36,17 @@ func validLine(t *testing.T) RequestLine {
 		Usage: decodeUsage(t, `{"input_tokens":10,"output_tokens":200,"server_tool_use":{"web_search_requests":1},"speed":"standard"}`)}
 }
 
-// Die Beispielzeile aus doc.md passt zum Typ: gleiche Schlüssel, gültig nach ValidateRequestLine, Signatur gültig
-// mit dem Testschlüssel. So bleiben Doku, Typ und Prüfung beieinander.
-func TestRequestLineMatchesDocExample(t *testing.T) {
+// docExample holt aus doc.md die Beispielzeile der Art kind, prüft ihre Signatur mit dem Testschlüssel und gibt die
+// Inhaltszeile z zurück.
+func docExample(t *testing.T, kind string) []byte {
+	t.Helper()
 	doc, err := os.ReadFile("doc.md")
 	if err != nil {
 		t.Fatal(err)
 	}
-	ex := regexp.MustCompile(`(?m)^\{"z":"\{\\"kind\\":\\"request\\".*$`).Find(doc)
+	ex := regexp.MustCompile(`(?m)^\{"z":"\{\\"kind\\":\\"` + kind + `\\".*$`).Find(doc)
 	if ex == nil {
-		t.Fatal("Beispielzeile nicht gefunden")
+		t.Fatalf("Beispielzeile %s nicht gefunden", kind)
 	}
 	var h struct{ Z, S string }
 	if err := json.Unmarshal(ex, &h); err != nil {
@@ -55,15 +56,20 @@ func TestRequestLineMatchesDocExample(t *testing.T) {
 	sig, _ := base64.StdEncoding.DecodeString(h.S)
 	pub := ed25519.NewKeyFromSeed(seed).Public().(ed25519.PublicKey)
 	if !ed25519.Verify(pub, append([]byte("tokenlore-archiv-v1\n"), h.Z...), sig) {
-		t.Fatal("Signatur der Beispielzeile ungültig")
+		t.Fatalf("Signatur der Beispielzeile %s ungültig", kind)
 	}
+	return []byte(h.Z)
+}
 
+// checkDocKeys prüft, dass die Beispielzeile z genau die Schlüssel des Typs von v hat.
+func checkDocKeys(t *testing.T, z []byte, v any) {
+	t.Helper()
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(h.Z), &raw); err != nil {
+	if err := json.Unmarshal(z, &raw); err != nil {
 		t.Fatal(err)
 	}
 	var tags []string
-	rt := reflect.TypeOf(RequestLine{})
+	rt := reflect.TypeOf(v)
 	for i := 0; i < rt.NumField(); i++ {
 		tags = append(tags, strings.Split(rt.Field(i).Tag.Get("json"), ",")[0])
 	}
@@ -75,12 +81,23 @@ func TestRequestLineMatchesDocExample(t *testing.T) {
 	if len(raw) != len(tags) {
 		t.Errorf("Beispielzeile hat %d Felder, Typ %d", len(raw), len(tags))
 	}
+}
 
-	d := json.NewDecoder(strings.NewReader(h.Z))
+// strictDecodeTest liest z wie Plugin und Server: unbekannte Schlüssel sind ein Fehler, Zahlen bleiben json.Number.
+func strictDecodeTest(z []byte, v any) error {
+	d := json.NewDecoder(bytes.NewReader(z))
 	d.UseNumber()
 	d.DisallowUnknownFields()
+	return d.Decode(v)
+}
+
+// Die Beispielzeile aus doc.md passt zum Typ: gleiche Schlüssel, gültig nach ValidateRequestLine, Signatur gültig
+// mit dem Testschlüssel. So bleiben Doku, Typ und Prüfung beieinander.
+func TestRequestLineMatchesDocExample(t *testing.T) {
+	zb := docExample(t, KindRequest)
+	checkDocKeys(t, zb, RequestLine{})
 	var l RequestLine
-	if err := d.Decode(&l); err != nil {
+	if err := strictDecodeTest(zb, &l); err != nil {
 		t.Fatal(err)
 	}
 	if err := ValidateRequestLine(l, time.Date(2026, 11, 6, 0, 0, 0, 0, time.UTC)); err != nil {
@@ -97,9 +114,9 @@ func TestRequestLineMatchesDocExample(t *testing.T) {
 	}
 	var a, z any
 	_ = json.Unmarshal(b, &a)
-	_ = json.Unmarshal([]byte(h.Z), &z)
+	_ = json.Unmarshal(zb, &z)
 	if !reflect.DeepEqual(a, z) {
-		t.Fatalf("neu geschrieben anders:\n%s\n%s", b, h.Z)
+		t.Fatalf("neu geschrieben anders:\n%s\n%s", b, zb)
 	}
 }
 

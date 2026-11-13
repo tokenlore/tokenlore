@@ -32,8 +32,10 @@ var fixedNow = time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
 
 // fakeSender zählt Aufrufe und merkt sich die Rümpfe; fn entscheidet über die Antwort (n ab 1).
 type fakeSender struct {
-	bodies [][]byte
-	fn     func(n int, body []byte) (client.IngestResult, error)
+	bodies   [][]byte
+	features []string
+	infos    int
+	fn       func(n int, body []byte) (client.IngestResult, error)
 }
 
 func (f *fakeSender) Ingest(_ context.Context, key string, body []byte) (client.IngestResult, error) {
@@ -45,6 +47,15 @@ func (f *fakeSender) Ingest(_ context.Context, key string, body []byte) (client.
 		return client.IngestResult{Requests: 1}, nil
 	}
 	return f.fn(len(f.bodies), body)
+}
+
+// Info meldet einen Server mit den Merkmalen features (Standard: request_details); infos zählt die Abrufe.
+func (f *fakeSender) Info(context.Context) (client.ServerInfo, error) {
+	f.infos++
+	if f.features == nil {
+		return client.ServerInfo{Features: []string{client.FeatureRequestDetails}}, nil
+	}
+	return client.ServerInfo{Features: f.features}, nil
 }
 
 type sleeper struct{ calls []time.Duration }
@@ -648,7 +659,7 @@ func TestNothingNew(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		dl, _, err := PrepareDelivery(archDir(data), st, "test", fixedNow)
+		dl, _, err := PrepareDelivery(archDir(data), st, "test", fixedNow, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

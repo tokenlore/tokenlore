@@ -2,14 +2,14 @@
 
 Ein Lieferpaket ist ein JSON-Objekt (`Batch`). Es enthält Zahlen und Metadaten, nie Nachrichteninhalte, Werkzeug-Ein- oder -Ausgaben, Dateipfade, Projektnamen oder eine Projekt-Kennung. Texte stehen nur in den Feldern, die die Tabellen unten als Text ausweisen, etwa Modell- und Werkzeugnamen oder kurze Werte in `usage`.
 
-Jede Anfrage und jeder Tag der Vorgeschichte steht im Archiv des Plugins als signierte Zeile und geht unverändert so an den Server. Der Server nimmt nur Zeilen an, deren Signatur zu einem Signaturschlüssel des liefernden Geräts passt.
+Jede Anfrage, jeder API-Fehler und jeder Tag der Vorgeschichte steht im Archiv des Plugins als signierte Zeile und geht unverändert so an den Server. Der Server nimmt nur Zeilen an, deren Signatur zu einem Signaturschlüssel des liefernden Geräts passt.
 
 ## Grenzen
 
 | Grenze | Wert |
 |---|---|
 | Paketgröße (JSON) | ≤ 1 048 576 Byte |
-| Anfragen pro Paket (`requests`) | ≤ 2000 |
+| Zeilen in `requests` pro Paket (Anfragen und Fehler zusammen) | ≤ 2000 |
 | Vorgeschichte-Tage pro Paket (`legacy_days`) | ≤ 10 000 |
 | Sitzungen pro Paket | ≤ 10 000 |
 | Hülle | JSON-Objekt mit genau den Schlüsseln `z` und `s` |
@@ -20,7 +20,11 @@ Jede Anfrage und jeder Tag der Vorgeschichte steht im Archiv des Plugins als sig
 | Signaturschlüssel je Gerät auf dem Server | ≤ 32 verschiedene (alle je gemeldeten zusammen, auch nach dem Zusammenlegen; der zuletzt gemeldete `sign_public_key` bleibt, darüber fallen die ältesten weg, siehe Koppeln) |
 | `sign_public_key_proof` | Base64 (Standardalphabet, mit `=`), genau 88 Zeichen, ergibt 64 Byte |
 | Modellname (`model`, `requested_model`, Schlüssel in `models`) | `^[A-Za-z0-9._-]{1,64}$` |
-| `effort`, `entrypoint`, `stop_reason` | `^[A-Za-z0-9_.-]{1,32}$` |
+| `effort`, `entrypoint`, `stop_reason`, `prompt_cache_requested`, `cache_miss_reason`, `error`, `rate_limit_type`, `limit_status`, `overage_status` | `^[A-Za-z0-9_.-]{1,32}$` |
+| `attribution_plugin`, `attribution_agent` | `^[A-Za-z0-9._:-]{1,64}$` |
+| `tool_input_stream_ms`, `thinking_duration_ms` | ganze Zahl 0 – 86 400 000 (Millisekunden) |
+| `api_error_status` | ganze Zahl 100 – 599 |
+| `resets_at` | ganze Zahl 0 – 100 000 000 000 (Unix-Sekunden) |
 | E-Mail | ≤ 254 Zeichen, enthält `@`, keine Steuerzeichen, Unicode-Formatzeichen (Cf, Zl, Zp, Co), Leerzeichen, `<>"` |
 | Kennungen (`*_id`, `uuid`, `parent_uuid`) | `^[A-Za-z0-9._:-]{1,128}$`; `request_id` darf leer sein (manche Backends liefern keine) |
 | Werkzeugname | `^[A-Za-z0-9._:-]{1,128}$`, ≤ 64 Werkzeuge pro Anfrage, Anzahl 1–10 000; andere Namen schreibt das Plugin als `_invalid` |
@@ -58,7 +62,7 @@ Jede Zeile im Archiv und jeder Eintrag in `requests` und `legacy_days` ist eine 
 **Beispielzeile** (eine Anfrage; Testschlüssel, nur für Beispiele und Tests):
 
 ```json
-{"z":"{\"kind\":\"request\",\"request_id\":\"req_011CBeispiel0000000001\",\"message_id\":\"msg_01Beispiel000000000001\",\"session_id\":\"0d6c5e7a-1f2b-4c3d-9e8f-0a1b2c3d4e5f\",\"uuid\":\"5b1c2d3e-4f50-4617-8293-a4b5c6d7e8f9\",\"parent_uuid\":\"4a0b1c2d-3e4f-4506-9718-293a4b5c6d7e\",\"ts\":\"2026-10-23T21:30:00Z\",\"utc_offset_min\":120,\"model\":\"claude-opus-5-5\",\"requested_model\":\"claude-opus-5-5\",\"effort\":\"medium\",\"entrypoint\":\"cli\",\"cc_version\":\"2.1.309\",\"stop_reason\":\"tool_use\",\"subagent\":false,\"tools\":{\"Bash\":1,\"Read\":1},\"account_id\":\"6f1e2d3c-4b5a-4968-8776-655443322110\",\"usage\":{\"input_tokens\":10,\"cache_creation_input_tokens\":300,\"cache_read_input_tokens\":4000,\"output_tokens\":200,\"output_tokens_details\":{\"thinking_tokens\":50},\"server_tool_use\":{\"web_search_requests\":1,\"web_fetch_requests\":0},\"service_tier\":\"standard\",\"cache_creation\":{\"ephemeral_1h_input_tokens\":300,\"ephemeral_5m_input_tokens\":0},\"inference_geo\":\"global\",\"iterations\":[],\"speed\":\"standard\"}}","s":"6bNs4D9yjhmQ7DH+W2ylnrS58miWuqX2jVFYzUfN1BOWO3+lIqsxfFv/vfRcA/ugt8nG8X6aCPVEOGX21D9FDw=="}
+{"z":"{\"kind\":\"request\",\"request_id\":\"req_011CBeispiel0000000001\",\"message_id\":\"msg_01Beispiel000000000001\",\"session_id\":\"0d6c5e7a-1f2b-4c3d-9e8f-0a1b2c3d4e5f\",\"uuid\":\"5b1c2d3e-4f50-4617-8293-a4b5c6d7e8f9\",\"parent_uuid\":\"4a0b1c2d-3e4f-4506-9718-293a4b5c6d7e\",\"ts\":\"2026-10-23T21:30:00Z\",\"utc_offset_min\":120,\"model\":\"claude-opus-5-5\",\"requested_model\":\"claude-opus-5-5\",\"effort\":\"medium\",\"entrypoint\":\"cli\",\"cc_version\":\"2.1.309\",\"stop_reason\":\"tool_use\",\"subagent\":false,\"tools\":{\"Bash\":1,\"Read\":1},\"account_id\":\"6f1e2d3c-4b5a-4968-8776-655443322110\",\"prompt_cache_requested\":\"1h\",\"tool_input_stream_ms\":850,\"thinking_duration_ms\":4200,\"attribution_plugin\":\"codecycle\",\"attribution_agent\":\"codecycle:builder\",\"cache_miss_reason\":\"ttl_expired\",\"usage\":{\"input_tokens\":10,\"cache_creation_input_tokens\":300,\"cache_read_input_tokens\":4000,\"output_tokens\":200,\"output_tokens_details\":{\"thinking_tokens\":50},\"server_tool_use\":{\"web_search_requests\":1,\"web_fetch_requests\":0},\"service_tier\":\"standard\",\"cache_creation\":{\"ephemeral_1h_input_tokens\":300,\"ephemeral_5m_input_tokens\":0},\"inference_geo\":\"global\",\"iterations\":[],\"speed\":\"standard\"}}","s":"hv28cJW3XjIMHkOgV+CYeuz3A12Dk9UfYMoup/KgrpX7is7pRdMquB4Q/Mz5xGAYcz6PWbGL1YW5zZCMBeryAw=="}
 ```
 
 Ein Vorgeschichte-Tag mit demselben Schlüssel:
@@ -67,13 +71,13 @@ Ein Vorgeschichte-Tag mit demselben Schlüssel:
 {"z":"{\"kind\":\"day\",\"date\":\"2026-03-14\",\"models\":{\"claude-opus-5-5\":182000,\"claude-haiku-4-5\":4100},\"activity\":{\"messages\":240,\"sessions\":3,\"tool_calls\":57},\"complete_before\":\"2026-10-20\"}","s":"dlyp5qNc5zqK1sfBwAE1iQjWOhCDb/2LL7IWwo+uJm0Znuf2a5BopXYaZkJcFf5nlo+mLnlAgE3nJCFmu71ACw=="}
 ```
 
-Testschlüssel: privater Seed (hex) `000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f`, öffentlicher Schlüssel (Base64) `A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=`. Beide Signaturen sind gültig; ändert sich ein Byte von `z`, ist sie es nicht mehr. Kennungen und Zahlen sind erfunden.
+Testschlüssel: privater Seed (hex) `000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f`, öffentlicher Schlüssel (Base64) `A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=`. Die Signaturen aller Beispielzeilen dieser Datei sind gültig; ändert sich ein Byte von `z`, ist es die Signatur nicht mehr. Kennungen und Zahlen sind erfunden.
 
 ### Inhaltszeile: Anfrage
 
 `kind` ist `request`. Eindeutig über (`request_id`, `message_id`), über alle Benutzer. Eine Anfrage steht im Archiv genau einmal und erst, wenn sie fertig ist: In derselben Protokolldatei folgt eine Zeile einer anderen Anfrage mit späterem Zeitpunkt, die Datei hat sich seit mindestens 5 Minuten nicht geändert, oder die Sitzung ist beendet (Hook `SessionEnd`; das gilt auch für die Dateien ihrer Subagenten). Tauchen danach noch Zeilen einer archivierten Anfrage auf, bleibt die Archivzeile unverändert.
 
-Die Inhaltszeile enthält nur die Schlüssel dieser Tabelle; ein anderer Schlüssel ist ein Fehler. Optionale Felder fehlen ganz, wenn das Protokoll den Wert nicht hat; ein optionaler Text (`uuid`, `parent_uuid`, `requested_model`, `effort`, `entrypoint`, `cc_version`, `stop_reason`) fehlt auch, wenn er seine Grenze verletzt. Verletzt ein anderes Feld seine Grenze oder wird die Zeile länger als 8192 Byte, übernimmt das Plugin die Anfrage nicht und zählt sie als Warnung.
+Die Inhaltszeile enthält nur die Schlüssel dieser Tabelle; ein anderer Schlüssel ist ein Fehler. Optionale Felder fehlen ganz, wenn das Protokoll den Wert nicht hat; ein optionaler Text (`uuid`, `parent_uuid`, `requested_model`, `effort`, `entrypoint`, `cc_version`, `stop_reason`, `prompt_cache_requested`, `attribution_plugin`, `attribution_agent`, `cache_miss_reason`) und eine optionale Dauer (`tool_input_stream_ms`, `thinking_duration_ms`) fehlen auch, wenn sie ihre Grenze verletzen. Verletzt ein anderes Feld seine Grenze oder wird die Zeile länger als 8192 Byte, übernimmt das Plugin die Anfrage nicht und zählt sie als Warnung.
 
 | Feld | Typ | Pflicht | Grenze | Herkunft im Protokoll von Claude Code |
 |---|---|---|---|---|
@@ -94,7 +98,15 @@ Die Inhaltszeile enthält nur die Schlüssel dieser Tabelle; ein anderer Schlüs
 | `subagent` | bool | ja | – | Anfrage eines Subagenten (Datei unter `subagents/` oder `isSidechain: true`) |
 | `tools` | {Name: Anzahl} | nein | Werkzeugname, Anzahl | Namen der `tool_use`-Blöcke aus `message.content` mit Anzahl; nur die Namen, nie die Eingaben |
 | `account_id` | string | nein | Kennung | eine Sitzung hat genau ein Konto: hat die Sitzung schon ein Konto im Archiv (gleicher oder voriger Monat), dieses; sonst das Konto beim Sitzungsstart (`sitzungen.jsonl`), sonst `ownerAccountUuid`, sonst das Konto der Sitzung, die archiviert. Konto einer Sitzung: das, das die Desktop-App in `CLAUDE_CODE_ACCOUNT_UUID` übergibt, sonst `oauthAccount.accountUuid` aus `.claude.json` |
+| `prompt_cache_requested` | string | nein | wie `effort` | `promptCacheRequested`, etwa `1h` oder `5m` |
+| `tool_input_stream_ms` | int | nein | 0 – 86 400 000 | `toolInputStreamMs` |
+| `thinking_duration_ms` | int | nein | 0 – 86 400 000 | `thinkingDurationMs` |
+| `attribution_plugin` | string | nein | `^[A-Za-z0-9._:-]{1,64}$` | `attributionPlugin` |
+| `attribution_agent` | string | nein | `^[A-Za-z0-9._:-]{1,64}$` | `attributionAgent`, etwa `codecycle:builder` |
+| `cache_miss_reason` | string | nein | wie `effort` | `message.diagnostics.cache_miss_reason.type` |
 | `usage` | object | ja | siehe `usage` | der Block `message.usage` der Protokollzeile dieser Anfrage mit dem größten `output_tokens`, bei Gleichstand der letzten |
+
+Die sechs Felder von `prompt_cache_requested` bis `cache_miss_reason` stammen aus der Protokollzeile, aus der auch `usage` stammt; fehlt ein Feld dort, aus der letzten Zeile der Anfrage, die es hat. Eine Anfrage mit einem dieser Felder braucht das Merkmal `request_details` des Servers (siehe „Server-Kennung“).
 
 **`usage`** ist der ganze Block aus dem Protokoll, damit neue Token-Arten ohne neues Plugin erhalten bleiben. Vor dem Signieren bringt das Plugin ihn in die Grenzen: Texte über 64 Zeichen werden auf 64 Zeichen gekürzt, Listen über 64 Einträge auf 64 Einträge; Schlüssel mit anderem Muster, Objekte und Listen jenseits der vierten Ebene, Werte über 256 hinaus (gezählt in alphabetischer Reihenfolge der Schlüssel, ein Objekt oder eine Liste vor ihrem Inhalt), Texte mit Steuer- und Formatzeichen und nicht endliche Zahlen fallen weg, ebenso ein Zählwert `null` (er gilt dann als 0). Eine Zeile im Archiv verletzt die Grenzen deshalb nie.
 
@@ -114,7 +126,43 @@ Die Inhaltszeile enthält nur die Schlüssel dieser Tabelle; ein anderer Schlüs
 
 Ein Zählwert, der da ist, aber keine ganze Zahl in seiner Grenze ist, ist ein Fehler. Die übrigen Schlüssel der obersten Ebene von `usage` mit Zahl oder Text als Wert (etwa `service_tier`, `speed`, `inference_geo`) gelten als `extra`: alphabetisch, höchstens 16.
 
-**Nie in einer Inhaltszeile:** `message.content` (außer den Werkzeugnamen), `wireToolInputs`, `wireIngestContext`, `cwd`, `gitBranch` und jedes andere Feld außerhalb der Tabelle. Neue Felder in den Protokollen nimmt das Plugin nicht auf, es meldet nur ihren Namen in `status`: Schlüssel der obersten Ebene und von `message` (als `message.<Name>`) in Zeilen einer Anfrage, die weder auf seiner Liste bekannter noch auf seiner Sperrliste stehen; Namen mit anderen Zeichen als `A–Z`, `a–z`, `0–9`, `_` und `-` übergeht es, längere als 64 Zeichen kürzt es.
+**Nie in einer Inhaltszeile:** `message.content` (außer den Werkzeugnamen einer Anfrage), `apiError`, `wireToolInputs`, `wireIngestContext`, `cwd`, `gitBranch` und jedes andere Feld außerhalb der Tabellen der Inhaltszeilen. Neue Felder in den Protokollen nimmt das Plugin nicht auf, es meldet nur ihren Namen in `status`: Schlüssel der obersten Ebene und von `message` (als `message.<Name>`) in Zeilen einer Anfrage, die weder auf seiner Liste bekannter noch auf seiner Sperrliste stehen; Namen mit anderen Zeichen als `A–Z`, `a–z`, `0–9`, `_` und `-` übergeht es, längere als 64 Zeichen kürzt es.
+
+### Inhaltszeile: Fehler
+
+`kind` ist `error`. Eine Fehlerzeile hält einen API-Fehler fest: eine Protokollzeile mit `isApiErrorMessage: true` und `message.model` `<synthetic>`. Sie trägt nur feste Werte und Zahlen, nie den Fehlertext `apiError` und nie `message.content`; ein Modell hat sie nicht.
+
+Eindeutig über (`request_id`, `message_id`) unter den Fehlerzeilen, über alle Benutzer. Wiederholte Lieferung und Vorrang gelten wie bei Anfragen (siehe „Prüfregeln des Servers“). Fehlerzeilen stehen in denselben Archivdateien wie Anfragen und gehen im Paket in `requests` mit; der Server unterscheidet nach `kind`. Eine Fehlerzeile braucht das Merkmal `request_details` des Servers (siehe „Server-Kennung“).
+
+Die Inhaltszeile enthält nur die Schlüssel dieser Tabelle; ein anderer Schlüssel ist ein Fehler. Optionale Felder fehlen ganz, wenn das Protokoll den Wert nicht hat oder er seine Grenze verletzt.
+
+| Feld | Typ | Pflicht | Grenze | Herkunft im Protokoll von Claude Code |
+|---|---|---|---|---|
+| `kind` | string | ja | `error` | – |
+| `request_id` | string | ja | Kennung, darf leer sein | `requestId` |
+| `message_id` | string | ja | Kennung | `message.id` |
+| `session_id` | string | ja | Kennung | `sessionId` |
+| `uuid` | string | nein | Kennung | `uuid` |
+| `parent_uuid` | string | nein | Kennung | `parentUuid` |
+| `ts` | string | ja | siehe `ts` | `timestamp`, in UTC |
+| `utc_offset_min` | int | ja | −840 – 840 | wie bei einer Anfrage |
+| `entrypoint` | string | nein | wie `entrypoint` | `entrypoint` |
+| `cc_version` | string | nein | wie `cc_version` | `version` |
+| `subagent` | bool | ja | – | wie bei einer Anfrage |
+| `account_id` | string | nein | Kennung | wie bei einer Anfrage |
+| `api_error_status` | int | nein | 100 – 599 | `apiErrorStatus` (HTTP-Status) |
+| `error` | string | nein | wie `effort` | `error`, etwa `rate_limit` |
+| `rate_limit_type` | string | nein | wie `effort` | `quotaLimits.rateLimitType` |
+| `limit_status` | string | nein | wie `effort` | `quotaLimits.status` |
+| `overage_status` | string | nein | wie `effort` | `quotaLimits.overageStatus` |
+| `is_using_overage` | bool | nein | – | `quotaLimits.isUsingOverage` |
+| `resets_at` | int | nein | 0 – 100 000 000 000 | `quotaLimits.resetsAt` (Unix-Sekunden) |
+
+**Beispielzeile** (ein API-Fehler; Testschlüssel wie oben):
+
+```json
+{"z":"{\"kind\":\"error\",\"request_id\":\"req_011CBeispiel0000000002\",\"message_id\":\"msg_01Beispiel000000000002\",\"session_id\":\"0d6c5e7a-1f2b-4c3d-9e8f-0a1b2c3d4e5f\",\"uuid\":\"6c2d3e4f-5061-4728-93a4-b5c6d7e8f9a0\",\"parent_uuid\":\"5b1c2d3e-4f50-4617-8293-a4b5c6d7e8f9\",\"ts\":\"2026-10-23T21:31:00Z\",\"utc_offset_min\":120,\"entrypoint\":\"cli\",\"cc_version\":\"2.1.309\",\"subagent\":false,\"account_id\":\"6f1e2d3c-4b5a-4968-8776-655443322110\",\"api_error_status\":429,\"error\":\"rate_limit\",\"rate_limit_type\":\"five_hour\",\"limit_status\":\"rejected\",\"overage_status\":\"disabled\",\"is_using_overage\":false,\"resets_at\":1792800000}","s":"nOuq0dtyHwV4JjVZAYiv0ShJYBw8cWDWHas1Guz+0Dfs4YgTPzlz9hHdFI5qBe2iwDXLYssSTTljPwgWQRgHCA=="}
+```
 
 ### Inhaltszeile: Vorgeschichte-Tag
 
@@ -138,10 +186,10 @@ Mindestens eines von `models` und `activity` ist da. Andere Schlüssel sind ein 
 | `device` | DeviceInfo | liefernde Maschine |
 | `accounts` | Account[] | nur im ersten Paket einer Lieferung |
 | `sessions` | Session[] | eine Sitzung steht im Paket ihrer ersten Anfrage |
-| `requests` | Hülle[] | Anfragen, je Hülle eine Inhaltszeile mit `kind: request` |
+| `requests` | Hülle[] | Anfragen und API-Fehler, je Hülle eine Inhaltszeile mit `kind: request` oder `kind: error` |
 | `legacy_days` | Hülle[] | Vorgeschichte-Tage, je Hülle eine Inhaltszeile mit `kind: day` |
 
-Eine Hülle in `requests` mit `kind: day` oder in `legacy_days` mit `kind: request` ist ein Fehler.
+Eine Hülle in `requests` mit `kind: day` oder in `legacy_days` mit `kind: request` oder `kind: error` ist ein Fehler.
 
 ## DeviceInfo
 
@@ -216,6 +264,7 @@ Antwort 200, JSON:
 - `min_plugin_version` (string): die älteste Plugin-Version, die der Server annimmt, `x.y.z`
 - `features` (Liste von Texten): Merkmale, die der Server über die Grundform des Protokolls hinaus kennt. Fehlt das Feld, gilt eine leere Liste. Unbekannte Einträge übergeht das Plugin. Bekannt ist:
   - `predecessor`: Der Server nimmt beim Koppeln `predecessor_source` und `predecessor_answer` an und kann nach dem Vorgänger fragen (siehe „Koppeln“, „Vorgänger“). Ein Server ohne dieses Merkmal lehnt die beiden Felder als unbekannt mit 400 ab; das Plugin sendet sie ihm deshalb nie.
+  - `request_details`: Der Server nimmt die Felder `prompt_cache_requested`, `tool_input_stream_ms`, `thinking_duration_ms`, `attribution_plugin`, `attribution_agent` und `cache_miss_reason` der Anfragezeile und Zeilen der Art `error` an. Ein Server ohne dieses Merkmal lehnt beides mit 400 ab (unbekannter Schlüssel, unbekannte Art); wie das Plugin dann liefert, steht unter „Liefern aus dem Archiv“.
 
 Fehler: 429 bei zu vielen Abrufen von derselben IP-Adresse, mit `Retry-After`; 503 bei alter Datenbank (siehe „Alte Datenbank“). Ohne Antwort 200 koppelt das Plugin nicht.
 
@@ -375,10 +424,10 @@ Das Archiv ist die einzige Quelle jeder Lieferung. Es liegt im Datenordner des P
 
 | Datei | Inhalt |
 |---|---|
-| `JJJJ-MM.jsonl` | je Zeile eine Hülle mit einer Anfrage; Monat nach UTC von `ts`; wird nur ergänzt |
+| `JJJJ-MM.jsonl` | je Zeile eine Hülle mit einer Anfrage oder einem API-Fehler; Monat nach UTC von `ts`; wird nur ergänzt |
 | `JJJJ-MM.jsonl.gz` | ein abgeschlossener Monat, mit gzip gepackt, danach unveränderlich |
 | `JJJJ-MM.jsonl.gz.sig` | Signatur der gepackten Datei: Base64 der Ed25519-Signatur über `tokenlore-archiv-monat-v1` + `0x0A` + die Bytes der `.gz`-Datei, eine Zeile |
-| `JJJJ-MM.nachtrag.jsonl` | Hüllen von Anfragen, die erst nach dem Packen ihres Monats fertig wurden; wird nie gepackt |
+| `JJJJ-MM.nachtrag.jsonl` | Hüllen von Anfragen und API-Fehlern, die erst nach dem Packen ihres Monats fertig wurden; wird nie gepackt |
 | `vorgeschichte.jsonl` | je Zeile eine Hülle mit einem Vorgeschichte-Tag; einmal übernommen |
 | `konten.jsonl` | je Konto eine Zeile `{"account_id":"…","email":"…"}` mit voller Adresse; `email` fehlt, solange die Adresse unbekannt ist (sie steht nur für Konten auf dem Gerät: das der Desktop-App aus `CLAUDE_CODE_USER_EMAIL` und das aus `.claude.json`); nicht signiert, verlässt das Gerät nur nach der E-Mail-Stufe |
 | `sitzungen.jsonl` | je Zeile `{"session_id":"…","account_id":"…","at":"…"}`: das Konto der Sitzung beim Sitzungsstart (Desktop-App, sonst `.claude.json`); höchstens ein Eintrag je Sitzung (eine fortgesetzte Sitzung schreibt keinen neuen); nur angehängt, nicht signiert, verlässt das Gerät nie; Einträge älter als 90 Tage fallen weg, höchstens 10 000 bleiben (die neuesten), aufgeräumt beim Schreiben und im Abgleich, also auch ohne Kopplung |
@@ -389,5 +438,6 @@ Eine Zeile im Archiv wird nie geändert. Ein abgebrochener Schreibvorgang hinter
 **Liefern aus dem Archiv:** Geliefert wird in dieser Reihenfolge: `vorgeschichte.jsonl`, dann je Monat aufsteigend die Monatsdatei (oder die `.gz`) und der Nachtrag; aus jeder Datei die Zeilen ab der Zahl in `geliefert.json`.
 Vor dem Senden prüft das Plugin jede Hülle selbst wie der Server: Signatur gegen den aktuellen oder einen früheren öffentlichen Signaturschlüssel, Inhaltszeile mit genau den erlaubten Schlüsseln in ihren Grenzen. Eine Zeile, die das nicht besteht, geht nicht mit, gilt als erledigt und zählt in `beschaedigt`; `status` nennt die Zahl. <!-- doku-ok: Fachbegriff aktueller/früherer Signaturschlüssel -->
 Ebenso geht eine Zeile nicht mit, deren Signatur nur zu einem früheren Schlüssel aus `sign_keys_refused` in `state.json` passt: Sie gilt als erledigt und zählt in `fremder_schluessel`, bleibt aber unverändert im Archiv; `sync`, `status` und `connect` nennen die Zahl mit dem Hinweis, dass diese älteren Zeilen nicht an den Server gehen, und dem Ausweg (Geräte zusammenlegen, danach neu koppeln). <!-- doku-ok: Fachbegriff aktueller/früherer Signaturschlüssel -->
+Nennt der Server das Merkmal `request_details` nicht, liefert das Plugin der Reihe nach nur bis vor die erste Zeile, die es braucht (eine Fehlerzeile oder eine Anfrage mit einem der Felder aus „Server-Kennung“), und hält dort an; `geliefert.json` rückt nur bis dahin vor. `sync`, `status` und der Sitzungsstart nennen den Grund mit dem Ausweg, den Server zu aktualisieren; nach dem Aktualisieren geht der Rest mit dem nächsten Abgleich. Ins Archiv schreibt das Plugin diese Felder und Fehlerzeilen unabhängig vom Server, und keine Archivzeile wird dafür geändert.
 Nach jedem angenommenen Paket rückt `geliefert.json` bis vor die erste ungelieferte Zeile jeder Datei vor; scheitert ein Paket, geht der Rest beim nächsten Abgleich. Neu koppeln löscht nur `geliefert.json`: Dann geht das ganze Archiv noch einmal, jede Zeile einmal, und der Server zählt schon Gespeichertes nicht doppelt (`known_requests`). Ist `geliefert.json` unlesbar, gilt dasselbe.
 Die Kontenliste geht im ersten Paket jeder Lieferung mit; ändert sie sich (neues Konto, andere E-Mail-Stufe), auch ohne neue Zeilen.

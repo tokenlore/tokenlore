@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -41,45 +42,26 @@ func ValidateRequestLine(l RequestLine, now time.Time) error {
 	if l.Kind != KindRequest {
 		return errors.New("kind ist nicht request")
 	}
-	if !IDPattern.MatchString(l.MessageID) {
-		return errors.New("message_id ungültig")
-	}
-	if l.RequestID != "" && !IDPattern.MatchString(l.RequestID) {
-		return errors.New("request_id ungültig")
-	}
-	if !IDPattern.MatchString(l.SessionID) {
-		return errors.New("session_id ungültig")
-	}
-	for _, f := range [][2]string{{"uuid", l.UUID}, {"parent_uuid", l.ParentUUID}, {"account_id", l.AccountID}} {
-		if f[1] != "" && !IDPattern.MatchString(f[1]) {
-			return errors.New(f[0] + " ungültig")
-		}
-	}
-	if !TSPattern.MatchString(l.TS.Format(time.RFC3339Nano)) {
-		return errors.New("ts nicht in UTC")
-	}
-	if l.TS.Before(Earliest) {
-		return errors.New("ts vor 2024")
-	}
-	if l.TS.After(now.Add(MaxFutureSkew)) {
-		return errors.New("ts liegt in der Zukunft")
-	}
-	if l.UTCOffsetMin < -MaxUTCOffsetMin || l.UTCOffsetMin > MaxUTCOffsetMin {
-		return errors.New("utc_offset_min außerhalb ±14 h")
+	if err := checkHead(l.RequestID, l.MessageID, l.SessionID, l.TS, l.UTCOffsetMin, now); err != nil {
+		return err
 	}
 	if !ModelPattern.MatchString(l.Model) {
 		return errors.New("model ungültig")
 	}
-	if l.RequestedModel != "" && !ModelPattern.MatchString(l.RequestedModel) {
-		return errors.New("requested_model ungültig")
-	}
-	for _, f := range [][2]string{{"effort", l.Effort}, {"entrypoint", l.Entrypoint}, {"stop_reason", l.StopReason}} {
-		if f[1] != "" && !StopPattern.MatchString(f[1]) {
-			return errors.New(f[0] + " ungültig")
-		}
-	}
-	if l.CCVersion != "" && !VersionPattern.MatchString(l.CCVersion) {
-		return errors.New("cc_version ungültig")
+	if err := firstErr(
+		checkOptional(IDPattern, [2]string{"uuid", l.UUID}, [2]string{"parent_uuid", l.ParentUUID},
+			[2]string{"account_id", l.AccountID}),
+		checkOptional(ModelPattern, [2]string{"requested_model", l.RequestedModel}),
+		checkOptional(StopPattern, [2]string{"effort", l.Effort}, [2]string{"entrypoint", l.Entrypoint},
+			[2]string{"stop_reason", l.StopReason}, [2]string{"prompt_cache_requested", l.PromptCacheRequested},
+			[2]string{"cache_miss_reason", l.CacheMissReason}),
+		checkOptional(VersionPattern, [2]string{"cc_version", l.CCVersion}),
+		checkOptional(AttributionPattern, [2]string{"attribution_plugin", l.AttributionPlugin},
+			[2]string{"attribution_agent", l.AttributionAgent}),
+		checkRange("tool_input_stream_ms", l.ToolInputStreamMs, 0, MaxDurationMs),
+		checkRange("thinking_duration_ms", l.ThinkingDurationMs, 0, MaxDurationMs),
+	); err != nil {
+		return err
 	}
 	if len(l.Tools) > MaxTools {
 		return fmt.Errorf("mehr als %d Werkzeuge", MaxTools)
@@ -105,6 +87,101 @@ func ValidateRequestLine(l RequestLine, now time.Time) error {
 	}
 	if len(b) > MaxLineBytes {
 		return fmt.Errorf("Zeile länger als %d Byte", MaxLineBytes)
+	}
+	return nil
+}
+
+// ValidateErrorLine prüft die Inhaltszeile eines API-Fehlers nach den Regeln, mit denen der Server sie prüft
+// (protocol/doc.md, „Inhaltszeile: Fehler“). Andere Schlüssel lehnt der strenge Leser ab, der z in ErrorLine liest.
+// Länger als MaxLineBytes kann die Zeile in ihren Grenzen nicht werden.
+func ValidateErrorLine(e ErrorLine, now time.Time) error {
+	if e.Kind != KindError {
+		return errors.New("kind ist nicht error")
+	}
+	return firstErr(
+		checkHead(e.RequestID, e.MessageID, e.SessionID, e.TS, e.UTCOffsetMin, now),
+		checkOptional(IDPattern, [2]string{"uuid", e.UUID}, [2]string{"parent_uuid", e.ParentUUID},
+			[2]string{"account_id", e.AccountID}),
+		checkOptional(StopPattern, [2]string{"entrypoint", e.Entrypoint}, [2]string{"error", e.Error},
+			[2]string{"rate_limit_type", e.RateLimitType}, [2]string{"limit_status", e.LimitStatus},
+			[2]string{"overage_status", e.OverageStatus}),
+		checkOptional(VersionPattern, [2]string{"cc_version", e.CCVersion}),
+		checkRange("api_error_status", e.APIErrorStatus, MinAPIErrorStatus, MaxAPIErrorStatus),
+		checkRange("resets_at", e.ResetsAt, 0, MaxResetsAt),
+	)
+}
+
+// NeedsRequestDetails sagt, ob die Inhaltszeile z das Merkmal request_details des Servers braucht: eine Fehlerzeile
+// oder eine Anfrage mit einem der Felder, die nur dieses Merkmal kennt (protocol/doc.md, „Server-Kennung“).
+// Eine Zeile, die kein JSON-Objekt ist, braucht es nicht; sie scheitert an der Prüfung.
+func NeedsRequestDetails(z string) bool {
+	var m map[string]json.RawMessage
+	if json.Unmarshal([]byte(z), &m) != nil {
+		return false
+	}
+	var kind string
+	if json.Unmarshal(m["kind"], &kind) == nil && kind == KindError {
+		return true
+	}
+	for _, k := range []string{"prompt_cache_requested", "tool_input_stream_ms", "thinking_duration_ms",
+		"attribution_plugin", "attribution_agent", "cache_miss_reason"} {
+		if _, ok := m[k]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// checkHead prüft die Pflichtfelder, die Anfrage- und Fehlerzeile gemeinsam haben.
+func checkHead(requestID, messageID, sessionID string, ts time.Time, utcOffsetMin int, now time.Time) error {
+	if !IDPattern.MatchString(messageID) {
+		return errors.New("message_id ungültig")
+	}
+	if requestID != "" && !IDPattern.MatchString(requestID) {
+		return errors.New("request_id ungültig")
+	}
+	if !IDPattern.MatchString(sessionID) {
+		return errors.New("session_id ungültig")
+	}
+	if !TSPattern.MatchString(ts.Format(time.RFC3339Nano)) {
+		return errors.New("ts nicht in UTC")
+	}
+	if ts.Before(Earliest) {
+		return errors.New("ts vor 2024")
+	}
+	if ts.After(now.Add(MaxFutureSkew)) {
+		return errors.New("ts liegt in der Zukunft")
+	}
+	if utcOffsetMin < -MaxUTCOffsetMin || utcOffsetMin > MaxUTCOffsetMin {
+		return errors.New("utc_offset_min außerhalb ±14 h")
+	}
+	return nil
+}
+
+// checkOptional prüft optionale Texte {Name, Wert}: leer (fehlt) oder passend zu p.
+func checkOptional(p *regexp.Regexp, fields ...[2]string) error {
+	for _, f := range fields {
+		if f[1] != "" && !p.MatchString(f[1]) {
+			return errors.New(f[0] + " ungültig")
+		}
+	}
+	return nil
+}
+
+// checkRange prüft eine optionale Zahl: nil (fehlt) oder in lo – hi.
+func checkRange(name string, v *int64, lo, hi int64) error {
+	if v != nil && (*v < lo || *v > hi) {
+		return errors.New(name + " außerhalb des Bereichs")
+	}
+	return nil
+}
+
+// firstErr ist der erste Fehler aus errs, sonst nil.
+func firstErr(errs ...error) error {
+	for _, err := range errs {
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }

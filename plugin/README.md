@@ -16,8 +16,9 @@ Bitte vor dem Koppeln lesen. Die Feldliste mit allen Grenzen steht in [`PROTOCOL
 
 **Was gesendet wird:**
 
-- Pro API-Anfrage: Anfrage-, Nachrichten- und Sitzungs-ID, die Kennungen der Protokollzeile und ihrer Vorgängerin (`uuid`, `parentUuid`), Zeitpunkt (UTC) und Ortszeit-Versatz, Modellname und angefordertes Modell, `effort`-Stufe, Startweg (`entrypoint`, etwa `cli`), Claude-Code-Version, `stop_reason`, ob die Anfrage von einem Subagenten stammt, die Liste benutzter Werkzeuge mit Anzahl, Konto-ID und der ganze Block mit den Nutzungsangaben (`usage`: Token-Zahlen für Eingabe, Ausgabe, Cache und Denken, Websuchen und -abrufe, dazu kurze Angaben wie `service_tier` oder `speed`). Texte in `usage` kürzt das Plugin auf 64 Zeichen.
-- Pro Anfrage dazu die Signatur dieser Zeile (siehe unten).
+- Pro API-Anfrage: Anfrage-, Nachrichten- und Sitzungs-ID, die Kennungen der Protokollzeile und ihrer Vorgängerin (`uuid`, `parentUuid`), Zeitpunkt (UTC) und Ortszeit-Versatz, Modellname und angefordertes Modell, `effort`-Stufe, Startweg (`entrypoint`, etwa `cli`), Claude-Code-Version, `stop_reason`, ob die Anfrage von einem Subagenten stammt, die Liste benutzter Werkzeuge mit Anzahl, Konto-ID, die angeforderte Cache-Dauer (`prompt_cache_requested`, etwa `1h`), wie lange Werkzeug-Eingaben gestreamt wurden und wie lange das Modell nachgedacht hat (in Millisekunden), Plugin und Agent, denen Claude Code die Anfrage zuordnet (`attribution_plugin`, `attribution_agent`, etwa `codecycle:builder`), der Grund, warum der Cache nicht traf (`cache_miss_reason`, etwa `ttl_expired`), und der ganze Block mit den Nutzungsangaben (`usage`: Token-Zahlen für Eingabe, Ausgabe, Cache und Denken, Websuchen und -abrufe, dazu kurze Angaben wie `service_tier` oder `speed`). Texte in `usage` kürzt das Plugin auf 64 Zeichen.
+- Pro API-Fehler (etwa ein erreichtes Nutzungslimit): Anfrage-, Nachrichten- und Sitzungs-ID, die Kennungen der Protokollzeile und ihrer Vorgängerin, Zeitpunkt (UTC) und Ortszeit-Versatz, Startweg, Claude-Code-Version, ob der Fehler einen Subagenten traf, Konto-ID, der HTTP-Status, die Fehlerart (etwa `rate_limit`) und die Angaben zum Limit: welches Limit, sein Status, Status und Nutzung des Zusatzkontingents, wann es zurückgesetzt wird. Nie der Fehlertext.
+- Pro Anfrage und API-Fehler dazu die Signatur dieser Zeile (siehe unten).
 - Pro Sitzung: Sitzungs-ID, Claude-Code-Version, Konto-ID, abgeleitet aus den Anfragen.
 - Pro Gerät: der Gerätename, den du beim Koppeln vergibst, Betriebssystem, Architektur, Zeitzone, Plugin-Version.
 - Beim Koppeln: die Plugin-Version, der öffentliche Signaturschlüssel dieses Rechners mit einem Besitznachweis (seine Signatur über die Server-Kennung und den Kopplungscode; sie zeigt, dass der Rechner den privaten Schlüssel hat, und verrät ihn nicht), die öffentlichen Teile früherer Signaturschlüssel und `device_source`, die Kennung dieses Rechners für genau diesen Server. `device_source` ist ein HMAC-SHA256 der Server-Kennung (`server_id`, die der Server vor dem Koppeln nennt) mit der Kennung aus `tokenlore-id` als Schlüssel. Jeder Server bekommt eine andere, aus ihr lässt sich die Kennung nicht zurückrechnen, und ein Umzug des Servers auf eine neue Adresse ändert sie nicht. Stammt der Konfigurationsordner von einem anderen Rechner, dazu `predecessor_source`: dieselbe Rechnung mit der Kennung jenes Rechners, damit der Server ihn unter deinen Geräten erkennt (siehe [Kopierter Konfigurationsordner](#kopierter-konfigurationsordner)); nur an Server, die das kennen.
@@ -41,21 +42,23 @@ Bitte vor dem Koppeln lesen. Die Feldliste mit allen Grenzen steht in [`PROTOCOL
 
 **Zu altes Plugin:** Jeder Server nennt die älteste Plugin-Version, die er annimmt. Ist dein Plugin älter, lehnt er Koppeln und Liefern ab; `/tokenlore:status` zeigt dann „Bitte tokenlore auf mindestens … aktualisieren“ mit dem Befehl dazu. Die Daten warten im Archiv und gehen nach dem Aktualisieren raus.
 
+**Zu alter Server:** Kennt dein Server die Angaben zu Cache, Dauer, Plugin und Agent oder die API-Fehler nicht, liefert das Plugin der Reihe nach bis vor die erste Zeile mit solchen Angaben und hält dort an. `/tokenlore:sync`, `/tokenlore:status` und der Sitzungsstart sagen dir das. Die Zeilen warten im Archiv; ist der Server aktualisiert, gehen sie beim nächsten Abgleich raus.
+
 **Vorschau:** `/tokenlore:status --next` zeigt genau das nächste Paket aus dem Archiv, das gesendet würde.
 
 ## Archiv
 
 Das Archiv ist die einzige Quelle für den Server. Es hält jede Anfrage dieses Rechners fest, auch wenn Claude Code die Sitzungsdateien löscht (Standard nach 30 Tagen), und lässt sich jederzeit erneut liefern, etwa an einen neuen Server.
 
-**Was darin steht:** je Anfrage eine Zeile mit genau den Angaben, die unter [Was wird gesendet?](#was-wird-gesendet) für eine Anfrage stehen, samt Signatur; die Vorgeschichte aus `stats-cache.json`; je Claude-Konto Konto-ID und volle E-Mail-Adresse. Keine Inhalte, keine Pfade, keine Projekte. Eine Anfrage kommt erst hinein, wenn sie fertig ist: wenn in derselben Sitzungsdatei eine spätere Anfrage folgt, die Datei 5 Minuten ruht oder die Sitzung endet. Eine Zeile wird nie geändert.
+**Was darin steht:** je Anfrage und je API-Fehler eine Zeile mit genau den Angaben, die unter [Was wird gesendet?](#was-wird-gesendet) dafür stehen, samt Signatur; die Vorgeschichte aus `stats-cache.json`; je Claude-Konto Konto-ID und volle E-Mail-Adresse. Keine Inhalte, keine Pfade, keine Projekte. Anfragen und API-Fehler kommen erst hinein, wenn sie fertig sind: wenn in derselben Sitzungsdatei eine spätere Anfrage folgt, die Datei 5 Minuten ruht oder die Sitzung endet. Eine Zeile wird nie geändert.
 
 **Wo:** im Datenverzeichnis (siehe [Ablage und Schlüssel](#ablage-und-schlüssel)) unter `archiv/rechner-<kennung>/`, `<kennung>` ist die Kennung aus `tokenlore-id`. Nur dein Benutzer kann den Ordner lesen.
 
 | Datei | Inhalt |
 |---|---|
-| `JJJJ-MM.jsonl` | Anfragen des laufenden Monats (nach UTC), eine Zeile je Anfrage |
+| `JJJJ-MM.jsonl` | Anfragen und API-Fehler des laufenden Monats (nach UTC), eine Zeile je Anfrage oder Fehler |
 | `JJJJ-MM.jsonl.gz` und `.sig` | ein abgeschlossener Monat, gepackt, mit Signatur über die ganze Datei |
-| `JJJJ-MM.nachtrag.jsonl` | Anfragen, die erst nach dem Packen ihres Monats fertig wurden |
+| `JJJJ-MM.nachtrag.jsonl` | Anfragen und API-Fehler, die erst nach dem Packen ihres Monats fertig wurden |
 | `vorgeschichte.jsonl` | Tageswerte aus `stats-cache.json`, einmal übernommen |
 | `konten.jsonl` | je Konto Konto-ID und volle E-Mail-Adresse |
 | `sitzungen.jsonl` | je Sitzung ein Eintrag mit dem Konto der Sitzung beim Start; geht nie an den Server; Einträge älter als 90 Tage fallen weg, höchstens 10 000 bleiben, auch ohne Verbindung |
@@ -96,6 +99,7 @@ Für Windows/arm64 und macOS/Intel (amd64) gibt es keine fertigen Programme. Das
 ### Aktualisieren
 
 - **Automatisch:** in einer `claude`-Sitzung im Terminal `/plugin` → Reiter *Marketplaces* → *tokenlore* → *Enable auto-update*. Einmal pro Gerät; im Code-Tab der Desktop-App gibt es `/plugin` nicht. Claude Code holt neue Versionen dann kurz nach Sitzungsbeginn; aktiv werden sie mit `/reload-plugins` oder in der nächsten Sitzung.
+- **Im Menü:** `/tokenlore:menu` → *Plugin aktualisieren*. Danach steht `/reload-plugins` im Eingabefeld; Enter lädt die neue Version.
 - **Von Hand:** `claude plugin marketplace update tokenlore`, dann `claude plugin update tokenlore@tokenlore`, danach `/reload-plugins`.
 
 Was sich in jeder Version ändert, steht in [CHANGELOG.md](CHANGELOG.md).
@@ -131,11 +135,14 @@ Was sich in jeder Version ändert, steht in [CHANGELOG.md](CHANGELOG.md).
 
 | Befehl | Wirkung |
 |---|---|
+| `/tokenlore:menu` | Menü: oben Gerät und letzter Abgleich, darunter Status im Detail, E-Mail-Stufe ändern und Plugin aktualisieren |
 | `/tokenlore:connect <https://server> <code> [--ca <fingerabdruck>] [--name <gerätename>] [--vorgaenger gleich\|neu\|spaeter]` | Gerät koppeln oder neu koppeln; bei einem [kopierten Ordner](#kopierter-konfigurationsordner) fragt es, ob dieser Rechner das alte Gerät ist, `--vorgaenger` beantwortet die Frage im Voraus |
 | `/tokenlore:sync` | sofort abgleichen |
 | `/tokenlore:status [--next] [--warnings]` | Verbindung und Abgleich zeigen, mit `--next` das nächste Paket, mit `--warnings` die Texte der Warnungen |
 | `/tokenlore:email [off\|short\|full]` | E-Mail-Stufe wählen (Auswahlfenster) oder setzen |
 | `/tokenlore:disconnect` | Gerät trennen |
+
+`/tokenlore:status` und `/tokenlore:email` fehlen in der Liste beim Tippen von `/`, weil das Menü zu beiden führt; getippt laufen sie wie die anderen.
 
 ### Was beim Sitzungsstart passiert
 

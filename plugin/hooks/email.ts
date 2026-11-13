@@ -1,5 +1,5 @@
 import type { Register } from 'claude-code'
-import { handled, runDirect } from './direct.ts'
+import { firstLine, handled, runDirect } from './direct.ts'
 
 // Auswahlfenster für /tokenlore:email ohne Argument. Das Fenster öffnet Claude Code selbst, ohne dass Claude es
 // liest; deshalb darf es die Adresse zeigen. Die Textausgabe des Befehls liest Claude mit: Sie nennt nur die Stufe.
@@ -32,47 +32,54 @@ export function levelOf(c: Choice, answer: string): (typeof LEVELS)[number] | un
   return i < 0 ? undefined : LEVELS[i]
 }
 
+// chooseLevel zeigt das Auswahlfenster und setzt die gewählte Stufe. Die Meldung beginnt mit ✓ (gesetzt), · (nichts
+// geändert) oder ✗ (Fehler). undefined heißt: Stufe und Adresse nicht lesbar,
+// der Aufrufer nimmt seinen Rückfall. /tokenlore:menu ruft es auch.
+export async function chooseLevel($: any): Promise<{ text: string } | undefined> {
+  const bin = `${$.plugin.root}/bin/tokenlore`
+  let c: Choice
+  try {
+    const r = await $.process.run(['sh', bin, 'email', '--json'])
+    if (r.exitCode !== 0) {
+      return undefined
+    }
+    c = JSON.parse(r.stdout) as Choice
+  } catch {
+    return undefined
+  }
+
+  const current = LEVELS.find(l => l.mode === c.mode)?.name ?? 'Aus'
+  let answer: string
+  try {
+    answer = await $.ui.ask(
+      `Welche E-Mail-Adresse soll tokenlore senden? Die Stufe gilt für alle Konten; eingestellt ist ${current}.`,
+      { header: 'E-Mail', options: options(c) },
+    )
+  } catch {
+    return { text: `· Abgebrochen, die Stufe bleibt ${current}.` }
+  }
+
+  const level = levelOf(c, answer)
+  if (!level) {
+    return { text: `· Nichts gewählt, die Stufe bleibt ${current}.` }
+  }
+  // Die Meldungen von `email <stufe>` nennen keine Adresse; sie dürfen in den Chat.
+  const failure = await $.process
+    .run(['sh', bin, 'email', level.mode])
+    .then((r: any) => (r.exitCode === 0 ? '' : firstLine(r)))
+    .catch(() => 'tokenlore ließ sich nicht starten.')
+  if (failure !== '') {
+    return { text: `✗ Nicht gespeichert, die Stufe bleibt ${current}. ${failure}`.trim() }
+  }
+
+  return { text: `✓ E-Mail-Stufe: ${current} → ${level.name}` }
+}
+
 export const register: Register = on => {
   on('command.run', { command: 'tokenlore:email' }, async ($, e, next) => {
     if (e.args.trim() !== '') {
       return handled(e.args) ? runDirect($, 'email', e.args) : next(e)
     }
-    const bin = `${$.plugin.root}/bin/tokenlore`
-    let c: Choice
-    try {
-      const r = await $.process.run(['sh', bin, 'email', '--json'])
-      if (r.exitCode !== 0) {
-        return next(e)
-      }
-      c = JSON.parse(r.stdout) as Choice
-    } catch {
-      return next(e)
-    }
-
-    const current = LEVELS.find(l => l.mode === c.mode)?.name ?? 'Aus'
-    let answer: string
-    try {
-      answer = await $.ui.ask(
-        `Welche E-Mail-Adresse soll tokenlore senden? Die Stufe gilt für alle Konten; eingestellt ist ${current}.`,
-        { header: 'E-Mail', options: options(c) },
-      )
-    } catch {
-      return { text: 'Abgebrochen, die Stufe bleibt unverändert.' }
-    }
-
-    const level = levelOf(c, answer)
-    if (!level) {
-      return { text: 'Nichts gewählt, die Stufe bleibt unverändert.' }
-    }
-    // Die Meldungen von `email <stufe>` nennen keine Adresse; sie dürfen in den Chat.
-    const failure = await $.process
-      .run(['sh', bin, 'email', level.mode])
-      .then(r => (r.exitCode === 0 ? '' : (r.stderr || r.stdout).trim().split('\n')[0] ?? ''))
-      .catch(() => 'tokenlore ließ sich nicht starten.')
-    if (failure !== '') {
-      return { text: `Nicht gespeichert, die Stufe bleibt unverändert. ${failure}`.trim() }
-    }
-
-    return { text: `E-Mail-Stufe ist ${level.name}.` }
+    return (await chooseLevel($)) ?? next(e)
   }).catch(($, e, next) => next(e)) // Fehler im Modul: der Befehl läuft wie ohne Auswahlfenster
 }

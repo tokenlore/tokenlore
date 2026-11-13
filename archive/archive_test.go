@@ -62,7 +62,7 @@ func add(t *testing.T, a *Archive, lines ...protocol.RequestLine) AddResult {
 			t.Fatalf("Testzeile ungültig: %v", err)
 		}
 	}
-	r, err := a.AddRequests(lines, "")
+	r, err := a.AddRequests(lines, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -462,10 +462,10 @@ func TestAddRequestsAccountFromSessionOrFallback(t *testing.T) {
 		withSession(req("m3", "r3", "2026-11-02T11:00:00Z", 1), "s2", ""),
 		withSession(req("m4", "r4", "2026-12-01T10:00:00Z", 1), "s1", ""), // Vormonat
 	}
-	if _, err := a.AddRequests(lines, "acc-2"); err != nil {
+	if _, err := a.AddRequests(lines, nil, "acc-2"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.AddRequests([]protocol.RequestLine{withSession(req("m5", "r5", "2026-11-03T10:00:00Z", 1), "s3", "")}, ""); err != nil {
+	if _, err := a.AddRequests([]protocol.RequestLine{withSession(req("m5", "r5", "2026-11-03T10:00:00Z", 1), "s3", "")}, nil, ""); err != nil {
 		t.Fatal(err)
 	}
 	got := map[string]string{}
@@ -507,11 +507,11 @@ func TestAddRequestsAccountFromSessionStart(t *testing.T) {
 	a := open(t, dir, nov6)
 	if _, err := a.AddRequests([]protocol.RequestLine{
 		l("m1", "s-start", ""), l("m2", "s-owner", "acc-owner"), l("m3", "s-ohne", ""), l("m6", "s-nurowner", "acc-owner"),
-	}, "acc-jetzt"); err != nil {
+	}, nil, "acc-jetzt"); err != nil {
 		t.Fatal(err)
 	}
 	a = open(t, dir, nov6)
-	if _, err := a.AddRequests([]protocol.RequestLine{l("m4", "s-owner", "acc-anders"), l("m5", "s-start", "")}, "acc-jetzt"); err != nil {
+	if _, err := a.AddRequests([]protocol.RequestLine{l("m4", "s-owner", "acc-anders"), l("m5", "s-start", "")}, nil, "acc-jetzt"); err != nil {
 		t.Fatal(err)
 	}
 	got := map[string]string{}
@@ -601,5 +601,40 @@ func TestPruneSessionStarts(t *testing.T) {
 	all, first, _ = readSessionStarts(dir)
 	if len(all) != sessionMax || first["s0"] != "" || first["s"+itoa(sessionMax+4)] != "acc" {
 		t.Fatalf("%d Einträge", len(all))
+	}
+}
+
+// errLine baut eine gültige Fehlerzeile.
+func errLine(msg, reqID, ts string) protocol.ErrorLine {
+	r := req(msg, reqID, ts, 0)
+	status := int64(429)
+	return protocol.ErrorLine{Kind: protocol.KindError, RequestID: reqID, MessageID: msg, SessionID: "s2",
+		TS: r.TS, UTCOffsetMin: 60, APIErrorStatus: &status, Error: "rate_limit"}
+}
+
+// Fehlerzeilen stehen in derselben Monatsdatei wie Anfragen, je einmal, entdoppelt nur unter sich; ihr Konto setzt
+// das Archiv wie bei Anfragen; für die Vorgeschichte zählt ihr Tag nicht als Tag mit Anfrage.
+func TestAddRequestsErrorLines(t *testing.T) {
+	dir := newDir(t)
+	a := open(t, dir, nov6)
+	add(t, a, req("msg_1", "req_1", "2026-11-03T10:00:00Z", 5))
+	e := errLine("msg_1", "req_1", "2026-11-02T10:00:00Z") // derselbe Schlüssel wie die Anfrage: zählt trotzdem
+	if err := protocol.ValidateErrorLine(e, nov6); err != nil {
+		t.Fatal(err)
+	}
+	r, err := a.AddRequests(nil, []protocol.ErrorLine{e, e}, "acc-jetzt")
+	if err != nil || r.Added != 1 {
+		t.Fatalf("hinzugefügt %d, %v", r.Added, err)
+	}
+	// Neu geöffnet: Das Archiv kennt die Fehlerzeile aus der Datei und schreibt sie nicht noch einmal.
+	if r, err := open(t, dir, nov6).AddRequests(nil, []protocol.ErrorLine{e}, ""); err != nil || r.Added != 0 {
+		t.Fatalf("doppelt: hinzugefügt %d, %v", r.Added, err)
+	}
+	lines := readAll(t, filepath.Join(dir, MonthFile("2026-11")))
+	if len(lines) != 2 || !strings.Contains(lines[1].Z, `"kind":"error"`) || !strings.Contains(lines[1].Z, `"account_id":"acc-jetzt"`) {
+		t.Fatalf("Monatsdatei %v", lines)
+	}
+	if w, _, err := a.AddLegacy([]protocol.DayLine{day("2026-11-02", 5), day("2026-11-03", 5)}); err != nil || w != 1 {
+		t.Fatalf("Vorgeschichte geschrieben %d, %v", w, err)
 	}
 }

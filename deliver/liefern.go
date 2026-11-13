@@ -26,7 +26,7 @@ type item struct {
 	src  int // Index in Delivery.sources
 	line int // Nummer der Zeile in ihrer Datei
 	env  protocol.Envelope
-	// Nur bei Anfragen: Sitzung, Zeitpunkt, Claude-Code-Version und Konto aus der Inhaltszeile.
+	// Nur bei Anfragen und Fehlerzeilen: Sitzung, Zeitpunkt, Claude-Code-Version und Konto aus der Inhaltszeile.
 	sid, ccVersion, account string
 	ts                      time.Time
 	date                    string // nur bei Vorgeschichte-Tagen
@@ -41,6 +41,8 @@ type Delivery struct {
 	Requests, Days, Damaged, Foreign int
 	// NothingNew: keine Hülle offen und die Kontenliste unverändert; zu senden gibt es nichts.
 	NothingNew bool
+	// Held: Die Lieferung hält vor der ersten Zeile an, die der Server ohne Merkmal request_details ablehnte.
+	Held bool
 
 	dir         string
 	done        *archive.Delivered
@@ -59,7 +61,11 @@ type Delivery struct {
 // beschädigt, damit eine kaputte Zeile die übrigen nie blockiert. Ebenso geht eine Zeile nicht mit, deren früheren
 // Signaturschlüssel der Server einem anderen Gerät zuordnet (st.SignKeysRefused); sie zählt als erledigt und als
 // fremd. Es schreibt nichts. Warnungen nennen Dateinamen, nie Inhalte.
-func PrepareDelivery(dir string, st *state.State, version string, now time.Time) (*Delivery, []string, error) {
+//
+// details sagt, ob der Server das Merkmal request_details nennt; PrepareDelivery fragt erst an der ersten Zeile, die
+// es braucht. Nennt er es nicht, endet die Lieferung vor dieser Zeile (Held), und der Merker rückt nur bis dahin
+// vor. nil heißt: alles liefern.
+func PrepareDelivery(dir string, st *state.State, version string, now time.Time, details func() (bool, error)) (*Delivery, []string, error) {
 	tzName, _ := device.LocalTZ()
 	dev := protocol.DeviceInfo{OS: runtime.GOOS, Arch: runtime.GOARCH, TZ: tzName, PluginVersion: version}
 	if err := protocol.ValidateDevice(dev); err != nil {
@@ -81,7 +87,12 @@ func PrepareDelivery(dir string, st *state.State, version string, now time.Time)
 	dl := &Delivery{dir: dir, done: done, sources: sources, total: make([]int, len(sources)),
 		damagedAt: make([][]int, len(sources)), foreignAt: make([][]int, len(sources))}
 	var days, reqs []item
+sources:
 	for si, src := range sources {
+		if dl.Held {
+			dl.total[si] = done.Lines[src.Name] // nicht gelesen: der Merker bleibt, wo er ist
+			continue
+		}
 		lines, err := archive.ReadLines(src.Path)
 		if err != nil {
 			return nil, nil, fmt.Errorf("%s nicht lesbar: %w", src.Name, err)
@@ -105,6 +116,17 @@ func PrepareDelivery(dir string, st *state.State, version string, now time.Time)
 				dl.foreignAt[si] = append(dl.foreignAt[si], i)
 				dl.Foreign++
 				continue
+			}
+			if details != nil && protocol.NeedsRequestDetails(it.env.Z) {
+				ok, err := details()
+				if err != nil {
+					return nil, nil, err
+				}
+				if !ok {
+					dl.Held, dl.total[si] = true, i
+					continue sources
+				}
+				details = nil
 			}
 			it.src, it.line = si, i
 			if src.Day {
@@ -189,7 +211,7 @@ const (
 )
 
 // checkLine prüft eine Archivzeile wie der Server: Hülle mit genau z und s, Signatur passt zu einem der Schlüssel,
-// z ist eine Inhaltszeile der erwarteten Art in ihren Grenzen. Passt die Signatur nur zu einem Schlüssel aus foreign,
+// z ist eine Inhaltszeile der erwarteten Art in ihren Grenzen (in einer Monatsdatei Anfrage oder Fehler). Passt die Signatur nur zu einem Schlüssel aus foreign,
 // ist die Zeile fremd, gleich was in z steht.
 func checkLine(raw []byte, day bool, keys, foreign []string, now time.Time) (item, int) {
 	var env protocol.Envelope
@@ -209,6 +231,17 @@ func checkLine(raw []byte, day bool, keys, foreign []string, now time.Time) (ite
 			return item{}, lineDamaged
 		}
 		it.date = d.Date
+		return it, lineOK
+	}
+	var k struct {
+		Kind string `json:"kind"`
+	}
+	if json.Unmarshal([]byte(env.Z), &k) == nil && k.Kind == protocol.KindError {
+		var e protocol.ErrorLine
+		if !strictDecode([]byte(env.Z), &e) || protocol.ValidateErrorLine(e, now) != nil {
+			return item{}, lineDamaged
+		}
+		it.sid, it.ccVersion, it.account, it.ts = e.SessionID, e.CCVersion, e.AccountID, e.TS
 		return it, lineOK
 	}
 	var l protocol.RequestLine

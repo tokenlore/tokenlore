@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tokenlore/tokenlore/deliver"
 	"github.com/tokenlore/tokenlore/internal/testpki"
 	"github.com/tokenlore/tokenlore/lock"
 	"github.com/tokenlore/tokenlore/secret"
@@ -311,5 +312,48 @@ func TestSyncPinnedStateStillWorks(t *testing.T) {
 	}
 	if system.Load() != 0 {
 		t.Fatal("System-Zertifikate trotz gepinnter CA")
+	}
+}
+
+// Ein Server ohne Merkmal request_details: sync, status und der Sessionstart nennen den Grund und den Ausweg; nach
+// dem Aktualisieren des Servers geht der Rest, und der Hinweis verschwindet.
+func TestSyncOldServerHint(t *testing.T) {
+	f := newFakeServer(t)
+	cfg, data := connectedEnv(t, f)
+	testLock(t)
+	b, err := os.ReadFile("../../source/claudecode/testdata/details.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(cfg, "projects", "P", "s7.jsonl")
+	if err := os.WriteFile(p, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	restFile(t, p)
+	hint := "Hinweis: " + deliver.MsgHeldForServer
+	status := func() string {
+		var out bytes.Buffer
+		runStatus(nil, &out, data, cfg)
+		return out.String()
+	}
+	code, out, errOut := syncRun(data, cfg)
+	if code != 0 || !strings.Contains(out, hint) {
+		t.Fatalf("Exit %d: %s%s", code, out, errOut)
+	}
+	if s := status(); !strings.Contains(s, hint) {
+		t.Fatalf("status ohne Hinweis:\n%s", s)
+	}
+	if n := sessionStartNotice(data, cfg); !strings.Contains(n, deliver.MsgHeldForServer) {
+		t.Fatalf("Sessionstart ohne Hinweis: %q", n)
+	}
+	if code, out, errOut := syncRun(data, cfg); code != 0 || !strings.Contains(out, "Nichts Neues.") || !strings.Contains(out, hint) {
+		t.Fatalf("zweiter Lauf: Exit %d: %s%s", code, out, errOut)
+	}
+	f.features = []string{"request_details"}
+	if code, out, errOut := syncRun(data, cfg); code != 0 || strings.Contains(out, hint) || !strings.Contains(out, "Abgleich fertig:") {
+		t.Fatalf("nach dem Aktualisieren: Exit %d: %s%s", code, out, errOut)
+	}
+	if s := status(); strings.Contains(s, deliver.MsgHeldForServer) {
+		t.Fatalf("status mit Hinweis:\n%s", s)
 	}
 }

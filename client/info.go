@@ -25,6 +25,10 @@ type ServerInfo struct {
 // Vorgänger fragen. Einem Server ohne dieses Merkmal sendet das Plugin die beiden Felder nie (er lehnte sie mit 400 ab).
 const FeaturePredecessor = "predecessor"
 
+// FeatureRequestDetails: Der Server nimmt die neueren Felder der Anfragezeile und Fehlerzeilen (kind error) an. Einem
+// Server ohne dieses Merkmal liefert das Plugin nur bis vor die erste Zeile, die es braucht (protocol.NeedsRequestDetails).
+const FeatureRequestDetails = "request_details"
+
 // Has meldet, ob der Server das Merkmal f nennt.
 func (i ServerInfo) Has(f string) bool { return slices.Contains(i.Features, f) }
 

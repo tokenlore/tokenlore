@@ -1,5 +1,5 @@
 // Paket archive führt das signierte Archiv eines Rechners (protocol/doc.md, „Archiv des Plugins“): je fertige Anfrage
-// genau eine Hülle in der Monatsdatei (Monat nach UTC), die Vorgeschichte einmal, die Konten mit voller Adresse,
+// und je API-Fehler genau eine Hülle in der Monatsdatei (Monat nach UTC), die Vorgeschichte einmal, die Konten mit voller Adresse,
 // abgeschlossene Monate gepackt und signiert. Eine Zeile im Archiv wird nie geändert.
 package archive
 
@@ -64,7 +64,7 @@ type Archive struct {
 }
 
 // monthIdx ist, was das Archiv von einem Monat im Speicher hält: je Anfrage (message_id|request_id) der Hash ihres
-// usage-Blocks, je Sitzung das Konto ihrer Anfragen.
+// usage-Blocks, je Fehlerzeile (errorKey) der Hash ohne usage, je Sitzung das Konto ihrer Zeilen.
 type monthIdx struct {
 	req  map[string][32]byte
 	sess map[string]string
@@ -263,7 +263,7 @@ func eachLine(p string, fn func([]byte)) error {
 	}
 }
 
-// requestKey ist der Teil einer Anfrage-Inhaltszeile, den das Archiv liest.
+// requestKey ist der Teil einer Inhaltszeile (Anfrage oder Fehler), den das Archiv liest.
 type requestKey struct {
 	Kind         string          `json:"kind"`
 	RequestID    string          `json:"request_id"`
@@ -277,6 +277,9 @@ type requestKey struct {
 
 func key(messageID, requestID string) string { return messageID + "|" + requestID }
 
+// errorKey ist der Schlüssel einer Fehlerzeile: eindeutig nur unter den Fehlerzeilen, nie gleich dem einer Anfrage.
+func errorKey(messageID, requestID string) string { return "error|" + key(messageID, requestID) }
+
 // monthIndex lädt die Anfragen eines Monats: aus der Monatsdatei oder, wenn er gepackt ist, aus .gz und Nachtrag.
 func (a *Archive) monthIndex(m string) (*monthIdx, error) {
 	if idx, ok := a.index[m]; ok {
@@ -289,7 +292,11 @@ func (a *Archive) monthIndex(m string) (*monthIdx, error) {
 	}
 	for _, n := range files {
 		err := eachRequest(a.path(n), func(k requestKey) {
-			idx.req[key(k.MessageID, k.RequestID)] = sha256.Sum256(k.Usage)
+			kk := key(k.MessageID, k.RequestID)
+			if k.Kind == protocol.KindError {
+				kk = errorKey(k.MessageID, k.RequestID)
+			}
+			idx.req[kk] = sha256.Sum256(k.Usage)
 			if k.AccountID != "" {
 				idx.sess[k.SessionID] = k.AccountID
 			}
@@ -302,6 +309,7 @@ func (a *Archive) monthIndex(m string) (*monthIdx, error) {
 	return idx, nil
 }
 
+// eachRequest ruft fn für jede Anfrage und jede Fehlerzeile der Datei p.
 func eachRequest(p string, fn func(requestKey)) error {
 	lines, _, err := ReadFile(p)
 	if err != nil {
@@ -309,7 +317,8 @@ func eachRequest(p string, fn func(requestKey)) error {
 	}
 	for _, h := range lines {
 		var k requestKey
-		if json.Unmarshal([]byte(h.Z), &k) != nil || k.Kind != protocol.KindRequest || k.MessageID == "" {
+		if json.Unmarshal([]byte(h.Z), &k) != nil || (k.Kind != protocol.KindRequest && k.Kind != protocol.KindError) ||
+			k.MessageID == "" {
 			continue
 		}
 		fn(k)
@@ -317,26 +326,42 @@ func eachRequest(p string, fn func(requestKey)) error {
 	return nil
 }
 
-// AddRequests schreibt jede Anfrage, die noch nicht im Archiv steht, als signierte Hülle in die Datei ihres Monats
-// (UTC von ts), in einen gepackten Monat als Nachtrag. Entdoppelt wird über message_id und request_id gegen die
-// Dateien dieses Monats und, nahe der Monatsgrenze, des Nachbarmonats, dazu gegen die Zeilen dieses Aufrufs.
-// Das Konto einer Zeile setzt fillAccount. Die Zeilen müssen protocol.ValidateRequestLine bestehen.
-func (a *Archive) AddRequests(lines []protocol.RequestLine, fallback string) (AddResult, error) {
-	var res AddResult
-	pending := map[string][]byte{}
-	for _, l := range lines {
+// entry ist eine Zeile für AddRequests: eine Anfrage oder eine Fehlerzeile mit den Teilen, die das Archiv braucht.
+type entry struct {
+	key, sid string
+	ts       time.Time
+	account  *string  // account_id der Zeile, setzt fillAccount
+	hash     [32]byte // Hash des usage-Blocks; bei Fehlerzeilen der ohne usage
+	line     any
+}
+
+// AddRequests schreibt jede Anfrage und jede Fehlerzeile, die noch nicht im Archiv steht, als signierte Hülle in die
+// Datei ihres Monats (UTC von ts), in einen gepackten Monat als Nachtrag. Entdoppelt wird über message_id und
+// request_id (Fehlerzeilen nur unter sich) gegen die Dateien dieses Monats und, nahe der Monatsgrenze, des
+// Nachbarmonats, dazu gegen die Zeilen dieses Aufrufs. Das Konto einer Zeile setzt fillAccount. Die Zeilen müssen
+// protocol.ValidateRequestLine beziehungsweise protocol.ValidateErrorLine bestehen.
+func (a *Archive) AddRequests(lines []protocol.RequestLine, errs []protocol.ErrorLine, fallback string) (AddResult, error) {
+	var entries []entry
+	for _, l := range lines { // je Durchlauf eine Kopie: fillAccount ändert die Zeilen des Aufrufers nicht
 		u, err := protocol.MarshalLine(l.Usage)
 		if err != nil {
-			return res, err
+			return AddResult{}, err
 		}
-		hash := sha256.Sum256(u)
-		k := key(l.MessageID, l.RequestID)
-		m := Month(l.TS)
+		entries = append(entries, entry{key(l.MessageID, l.RequestID), l.SessionID, l.TS, &l.AccountID, sha256.Sum256(u), &l})
+	}
+	for _, e := range errs {
+		entries = append(entries, entry{errorKey(e.MessageID, e.RequestID), e.SessionID, e.TS, &e.AccountID, sha256.Sum256(nil), &e})
+	}
+	var res AddResult
+	pending := map[string][]byte{}
+	for _, l := range entries {
+		hash, k := l.hash, l.key
+		m := Month(l.ts)
 		months := []string{m}
-		if n := Month(l.TS.Add(-boundary)); n != m {
+		if n := Month(l.ts.Add(-boundary)); n != m {
 			months = append(months, n)
 		}
-		if n := Month(l.TS.Add(boundary)); n != m {
+		if n := Month(l.ts.Add(boundary)); n != m {
 			months = append(months, n)
 		}
 		known := false
@@ -356,10 +381,10 @@ func (a *Archive) AddRequests(lines []protocol.RequestLine, fallback string) (Ad
 		if known {
 			continue
 		}
-		if err := a.fillAccount(&l, m, fallback); err != nil {
+		if err := a.fillAccount(l.sid, l.account, m, fallback); err != nil {
 			return res, err
 		}
-		z, err := protocol.MarshalLine(l)
+		z, err := protocol.MarshalLine(l.line)
 		if err != nil {
 			return res, err
 		}
@@ -377,10 +402,10 @@ func (a *Archive) AddRequests(lines []protocol.RequestLine, fallback string) (Ad
 		}
 		pending[target] = append(append(pending[target], env...), '\n')
 		a.index[m].req[k] = hash
-		if l.AccountID != "" {
-			a.index[m].sess[l.SessionID] = l.AccountID
-			if !slices.Contains(res.Accounts, l.AccountID) {
-				res.Accounts = append(res.Accounts, l.AccountID)
+		if acc := *l.account; acc != "" {
+			a.index[m].sess[l.sid] = acc
+			if !slices.Contains(res.Accounts, acc) {
+				res.Accounts = append(res.Accounts, acc)
 			}
 		}
 		res.Added++
@@ -396,27 +421,27 @@ func (a *Archive) AddRequests(lines []protocol.RequestLine, fallback string) (Ad
 // fillAccount setzt das Konto einer Zeile des Monats m. Eine Sitzung hat genau ein Konto: Steht sie schon mit
 // Konto im Archiv (dieser und der Vormonat), gilt dieses. Sonst gilt das Konto beim Sitzungsstart aus sitzungen.jsonl,
 // sonst ownerAccountUuid aus dem Protokoll (schon in l.AccountID), sonst fallback, das Konto der laufenden Sitzung.
-func (a *Archive) fillAccount(l *protocol.RequestLine, m, fallback string) error {
-	acc, err := a.sessionAccount(l.SessionID, m)
+func (a *Archive) fillAccount(sid string, account *string, m, fallback string) error {
+	acc, err := a.sessionAccount(sid, m)
 	if err != nil {
 		return err
 	}
 	if acc != "" {
-		l.AccountID = acc
+		*account = acc
 		return nil
 	}
 	// Das Konto beim Sitzungsstart geht vor ownerAccountUuid: In Sitzungen der Desktop-App nennt die Sitzungsdatei
 	// teils das Konto aus .claude.json statt des Kontos, mit dem die App die Sitzung führt.
-	start, err := a.startAccount(l.SessionID)
+	start, err := a.startAccount(sid)
 	if err != nil {
 		return err
 	}
 	switch {
 	case start != "":
-		l.AccountID = start
-	case l.AccountID != "":
+		*account = start
+	case *account != "":
 	case protocol.IDPattern.MatchString(fallback):
-		l.AccountID = fallback
+		*account = fallback
 	}
 	return nil
 }
@@ -499,7 +524,7 @@ func (a *Archive) AddLegacy(days []protocol.DayLine) (written, dropped int, err 
 	return written, dropped, nil
 }
 
-// requestDays sind die lokalen Tage aller Anfragen im Archiv.
+// requestDays sind die lokalen Tage aller Anfragen im Archiv; Fehlerzeilen zählen nicht, sie tragen keine Zahlen.
 func (a *Archive) requestDays() (map[string]bool, error) {
 	entries, err := os.ReadDir(a.dir)
 	if err != nil {
@@ -512,6 +537,9 @@ func (a *Archive) requestDays() (map[string]bool, error) {
 			continue
 		}
 		err := eachRequest(a.path(n), func(k requestKey) {
+			if k.Kind != protocol.KindRequest {
+				return
+			}
 			days[k.TS.Add(time.Duration(k.UTCOffsetMin)*time.Minute).UTC().Format("2006-01-02")] = true
 		})
 		if err != nil {

@@ -48,7 +48,7 @@ func fillArchive(dir string, key ed25519.PrivateKey, now func() time.Time, confi
 		return nil, err
 	}
 	var warns []string
-	r, err := a.AddRequests(res.Lines, res.CurrentAccountID)
+	r, err := a.AddRequests(res.Lines, res.Errors, res.CurrentAccountID)
 	if err != nil {
 		return nil, err
 	}

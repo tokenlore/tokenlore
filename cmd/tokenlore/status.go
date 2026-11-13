@@ -109,7 +109,7 @@ func runStatus(args []string, out io.Writer, dataDir, configDir string) int {
 	// Was offen ist, steht im Archiv; status liest es nur. Ohne Kennung gibt es noch kein Archiv.
 	var dl *deliver.Delivery
 	if dir, err := deliver.ArchiveDir(dataDir, configDir, st, paired); err == nil {
-		if dl, _, err = deliver.PrepareDelivery(dir, st, version, time.Now()); err != nil {
+		if dl, _, err = deliver.PrepareDelivery(dir, st, version, time.Now(), nil); err != nil {
 			fmt.Fprintf(out, "Offen: nicht ermittelbar: %s\n", client.Clean(err.Error()))
 			return 1
 		}
@@ -132,6 +132,9 @@ func runStatus(args []string, out io.Writer, dataDir, configDir string) int {
 	}
 	if n := len(res.Lines); n > 0 {
 		fmt.Fprintf(out, "Noch nicht im Archiv: %d %s (kommen beim nächsten Abgleich dazu)\n", n, plural(n, "Anfrage", "Anfragen"))
+	}
+	if n := len(res.Errors); n > 0 {
+		fmt.Fprintf(out, "Noch nicht im Archiv: %d API-Fehler (kommen beim nächsten Abgleich dazu)\n", n)
 	}
 	if *next {
 		if dl == nil || len(dl.Parts) == 0 {

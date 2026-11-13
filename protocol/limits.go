@@ -28,12 +28,23 @@ const (
 	UsageMaxValues = 256
 	UsageMaxList   = 64
 
+	// Anfrage- und Fehlerzeile (protocol/doc.md, „Grenzen“): Dauern in Millisekunden, HTTP-Status eines API-Fehlers,
+	// resets_at in Unix-Sekunden, Länge von attribution_plugin und attribution_agent.
+	MaxDurationMs     = 86_400_000
+	MinAPIErrorStatus = 100
+	MaxAPIErrorStatus = 599
+	MaxResetsAt       = 100_000_000_000
+	MaxAttributionLen = 64
+
 	// MaxFutureSkew ist die Uhrabweichung, die ein Zeitstempel in der Zukunft haben darf.
 	MaxFutureSkew = 5 * time.Minute
 )
 
 // ModelPattern beschreibt erlaubte Modellnamen.
 var ModelPattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
+
+// AttributionPattern beschreibt attribution_plugin und attribution_agent, etwa "codecycle:builder".
+var AttributionPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,64}$`)
 
 // DeviceKeyPattern beschreibt das Format eines Geräteschlüssels (tl_dk_ + 32 Byte base64url ohne Auffüllung).
 var DeviceKeyPattern = regexp.MustCompile(`^tl_dk_[A-Za-z0-9_-]{43}$`)

@@ -126,6 +126,7 @@ func (c *ClaudeCode) Scan(ctx context.Context, st *state.State) (source.ScanResu
 		}
 		res.Warnings = append(res.Warnings, fr.warnings...)
 		res.Lines = append(res.Lines, fr.lines...)
+		res.Errors = append(res.Errors, fr.errors...)
 		for _, n := range fr.newFields {
 			newFields[n] = true
 		}
@@ -138,6 +139,11 @@ func (c *ClaudeCode) Scan(ctx context.Context, st *state.State) (source.ScanResu
 	for i := range res.Lines {
 		if res.Lines[i].AccountID == "" {
 			res.Lines[i].AccountID = owners[res.Lines[i].SessionID]
+		}
+	}
+	for i := range res.Errors {
+		if res.Errors[i].AccountID == "" {
+			res.Errors[i].AccountID = owners[res.Errors[i].SessionID]
 		}
 	}
 	res.HeldMonths = slices.Sorted(maps.Keys(held))
@@ -158,7 +164,8 @@ func (c *ClaudeCode) Scan(ctx context.Context, st *state.State) (source.ScanResu
 }
 
 type fileResult struct {
-	lines []protocol.RequestLine
+	lines  []protocol.RequestLine
+	errors []protocol.ErrorLine
 	// newFields: Namen unbekannter Schlüssel in Anfragezeilen, mit Wiederholungen.
 	newFields []string
 	// heldMonths: Monate (UTC) der zurückgehaltenen, noch nicht fertigen Anfragen dieser Datei.
@@ -235,11 +242,15 @@ func (c *ClaudeCode) scanFile(f sessionFile, st, next *state.State, owners map[s
 				owners[l.SessionID] = l.OwnerAccountUUID
 			}
 		}
-		// Manche Backends liefern keine requestId; dann ist message.id allein der Schlüssel.
-		if l.Type != "assistant" || l.Usage == nil || l.MessageID == "" {
+		// Manche Backends liefern keine requestId; dann ist message.id allein der Schlüssel. Eine Fehlerzeile ist eine
+		// Einheit für sich und wird fertig wie eine Anfrage; ihr Schlüssel trifft nie den einer Anfrage.
+		if l.Type != "assistant" || (l.Usage == nil && !l.APIError) || l.MessageID == "" {
 			continue
 		}
 		k := l.MessageID + "|" + l.RequestID
+		if l.APIError {
+			k = "error|" + k
+		}
 		lt, _ := time.Parse(time.RFC3339Nano, l.Timestamp) // nicht lesbar: Nullzeit, gibt nichts frei
 		if aggs[k] == nil {
 			aggs[k] = &reqAgg{}
@@ -289,6 +300,18 @@ func (c *ClaudeCode) scanFile(f sessionFile, st, next *state.State, owners map[s
 			continue
 		}
 		a := aggs[k]
+		if a.first.APIError {
+			e, ok := a.toErrorLine(c.Loc, f.Subagent)
+			if e.SessionID == "" {
+				e.SessionID = fileSID
+			}
+			if !ok || protocol.ValidateErrorLine(e, c.Now()) != nil {
+				invalid++
+				continue
+			}
+			fr.errors = append(fr.errors, e)
+			continue
+		}
 		l, ok := a.toLine(c.Loc, f.Subagent)
 		if !ok {
 			if m := a.first.Model; m != "" && m != "<synthetic>" {

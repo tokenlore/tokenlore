@@ -16,6 +16,9 @@ type ScanResult struct {
 	// Lines sind die Inhaltszeilen der fertigen Anfragen, mit der festen Feldliste aus protocol/doc.md. account_id
 	// steht nur, wenn das Protokoll das Konto der Sitzung nennt (ownerAccountUuid); sonst ergänzt es das Archiv.
 	Lines []protocol.RequestLine
+	// Errors sind die Inhaltszeilen der fertigen API-Fehler (protocol/doc.md, „Inhaltszeile: Fehler“); account_id wie
+	// bei Lines.
+	Errors []protocol.ErrorLine
 	// NewFields sind die Namen unbekannter Felder in den gelesenen Anfragezeilen, sortiert, höchstens
 	// state.MaxNewFields; nie ihre Werte.
 	NewFields []string

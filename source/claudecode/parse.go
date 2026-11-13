@@ -28,13 +28,55 @@ type rawLine struct {
 	Effort           looseString `json:"effort"`
 	Entrypoint       looseString `json:"entrypoint"`
 	IsSidechain      looseBool   `json:"isSidechain"`
-	Message          *struct {
-		ID         string          `json:"id"`
-		Model      string          `json:"model"`
-		StopReason string          `json:"stop_reason"`
-		Content    json.RawMessage `json:"content"` // nur kurz zum Lesen der Werkzeugnamen
-		Usage      json.RawMessage `json:"usage"`
+	// Angaben je Anfrage (protocol/doc.md, „Inhaltszeile: Anfrage“) und je API-Fehler („Inhaltszeile: Fehler“).
+	PromptCacheRequested looseString     `json:"promptCacheRequested"`
+	ToolInputStreamMs    json.RawMessage `json:"toolInputStreamMs"`
+	ThinkingDurationMs   json.RawMessage `json:"thinkingDurationMs"`
+	AttributionPlugin    looseString     `json:"attributionPlugin"`
+	AttributionAgent     looseString     `json:"attributionAgent"`
+	IsAPIErrorMessage    looseBool       `json:"isApiErrorMessage"`
+	APIErrorStatus       json.RawMessage `json:"apiErrorStatus"`
+	Error                looseString     `json:"error"`
+	QuotaLimits          json.RawMessage `json:"quotaLimits"`
+	Message              *struct {
+		ID          string          `json:"id"`
+		Model       string          `json:"model"`
+		StopReason  string          `json:"stop_reason"`
+		Content     json.RawMessage `json:"content"` // nur kurz zum Lesen der Werkzeugnamen
+		Usage       json.RawMessage `json:"usage"`
+		Diagnostics json.RawMessage `json:"diagnostics"`
 	} `json:"message"`
+}
+
+// quotaLimits ist der Block quotaLimits einer Fehlerzeile; nur feste Werte und Zahlen.
+type quotaLimits struct {
+	RateLimitType  looseString     `json:"rateLimitType"`
+	Status         looseString     `json:"status"`
+	OverageStatus  looseString     `json:"overageStatus"`
+	IsUsingOverage json.RawMessage `json:"isUsingOverage"`
+	ResetsAt       json.RawMessage `json:"resetsAt"`
+}
+
+// intIn ist die ganze Zahl in b, wenn sie in lo – hi liegt, sonst nil: Ein fehlender oder ungültiger Wert fehlt.
+func intIn(b json.RawMessage, lo, hi int64) *int64 {
+	var n json.Number
+	if json.Unmarshal(b, &n) != nil {
+		return nil
+	}
+	v, err := n.Int64()
+	if err != nil || v < lo || v > hi {
+		return nil
+	}
+	return &v
+}
+
+// boolOf ist true oder false aus b, sonst nil.
+func boolOf(b json.RawMessage) *bool {
+	var v bool
+	if json.Unmarshal(b, &v) != nil {
+		return nil
+	}
+	return &v
 }
 
 // looseString nimmt nur einen JSON-Text an; jeder andere Wert ergibt "".
@@ -71,6 +113,35 @@ type line struct {
 	ToolNames []string
 	// NewFields sind die Namen unbekannter Schlüssel einer Anfragezeile (oberste Ebene und message.…), nie Werte.
 	NewFields []string
+	Details   details
+	// APIError: eine Fehlerzeile (isApiErrorMessage, Modell "<synthetic>"); ErrInfo trägt dann ihre optionalen
+	// Angaben, schon in ihren Grenzen.
+	APIError bool
+	ErrInfo  protocol.ErrorLine
+}
+
+// details sind die Angaben einer Anfrage, die das Merkmal request_details des Servers brauchen; schon in ihren
+// Grenzen, ein ungültiger Wert ist leer oder nil.
+type details struct {
+	promptCache, plugin, agent, cacheMiss string
+	toolStream, thinking                  *int64
+}
+
+// or ergänzt jedes in d fehlende Feld aus o.
+func (d details) or(o details) details {
+	for dst, v := range map[*string]string{&d.promptCache: o.promptCache, &d.plugin: o.plugin, &d.agent: o.agent,
+		&d.cacheMiss: o.cacheMiss} {
+		if *dst == "" {
+			*dst = v
+		}
+	}
+	if d.toolStream == nil {
+		d.toolStream = o.toolStream
+	}
+	if d.thinking == nil {
+		d.thinking = o.thinking
+	}
+	return d
 }
 
 // Schlüssel einer Anfragezeile (type assistant mit message.usage). Bekannt sind die Felder, die tokenlore liest,
@@ -78,24 +149,24 @@ type line struct {
 // sie kommen nie in eine Inhaltszeile. Jeder andere Schlüssel gilt als neu und wird nur mit Namen gemeldet.
 var (
 	knownTop = setOf(
-		// gelesen
+		// gelesen; aus quotaLimits nur feste Werte und Zahlen
 		"type", "sessionId", "requestId", "timestamp", "version", "ownerAccountUuid", "uuid", "parentUuid",
-		"requestedModel", "effort", "entrypoint", "isSidechain", "message",
+		"requestedModel", "effort", "entrypoint", "isSidechain", "message", "promptCacheRequested",
+		"toolInputStreamMs", "thinkingDurationMs", "attributionPlugin", "attributionAgent", "isApiErrorMessage",
+		"apiErrorStatus", "error", "quotaLimits",
 		// bekannt, nicht übernommen
 		"userType", "perTurnEffort", "advisorModel", "serverClassifierRequest", "requestRef", "apiBlockIndex",
-		"agentId", "attributionAgent", "attributionPlugin", "attributionMcpTool", "attributionMcpServer",
-		"attributionSkill", "thinkingDurationMs", "thinkingDisplay", "quotaLimits", "isApiErrorMessage", "error",
-		"apiError", "apiErrorStatus", "apiErrorParams", "slug", "isMeta",
+		"agentId", "attributionMcpTool", "attributionMcpServer", "attributionSkill", "thinkingDisplay", "apiError",
+		"apiErrorParams", "failedResponseHadNoToolCall", "slug", "isMeta",
 	)
 	blockedTop = setOf("content", "wireToolInputs", "wireIngestContext", "cwd", "gitBranch", "toolUseResult",
 		"attachment", "snapshot", "lastPrompt", "customTitle", "title", "summary", "path", "params",
 		"serverClassifierContext", "hookAdditionalContext")
 	knownMessage = setOf(
-		// gelesen; aus content nur die Namen der tool_use-Blöcke
-		"id", "model", "stop_reason", "usage",
+		// gelesen; aus content nur die Namen der tool_use-Blöcke, aus diagnostics nur cache_miss_reason.type
+		"id", "model", "stop_reason", "usage", "diagnostics",
 		// bekannt, nicht übernommen
-		"type", "role", "stop_details", "diagnostics", "context_management", "container", "input_transformations",
-		"output_config",
+		"type", "role", "stop_details", "context_management", "container", "input_transformations", "output_config",
 	)
 	blockedMessage = setOf("content", "stop_sequence")
 )
@@ -122,11 +193,36 @@ func parseLine(b []byte) (line, error) {
 	l := line{Type: r.Type, SessionID: r.SessionID, RequestID: r.RequestID, Timestamp: r.Timestamp,
 		Version: r.Version, OwnerAccountUUID: r.OwnerAccountUUID, UUID: string(r.UUID),
 		ParentUUID: string(r.ParentUUID), RequestedModel: string(r.RequestedModel), Effort: string(r.Effort),
-		Entrypoint: string(r.Entrypoint), Sidechain: bool(r.IsSidechain)}
+		Entrypoint: string(r.Entrypoint), Sidechain: bool(r.IsSidechain),
+		Details: details{promptCache: valid(protocol.StopPattern, string(r.PromptCacheRequested)),
+			plugin:     valid(protocol.AttributionPattern, string(r.AttributionPlugin)),
+			agent:      valid(protocol.AttributionPattern, string(r.AttributionAgent)),
+			toolStream: intIn(r.ToolInputStreamMs, 0, protocol.MaxDurationMs),
+			thinking:   intIn(r.ThinkingDurationMs, 0, protocol.MaxDurationMs)}}
 	if r.Message == nil {
 		return l, nil
 	}
 	l.MessageID, l.Model, l.StopReason = r.Message.ID, r.Message.Model, r.Message.StopReason
+	var diag struct {
+		CacheMissReason struct {
+			Type looseString `json:"type"`
+		} `json:"cache_miss_reason"`
+	}
+	_ = json.Unmarshal(r.Message.Diagnostics, &diag) // kein Objekt: kein Grund
+	l.Details.cacheMiss = valid(protocol.StopPattern, string(diag.CacheMissReason.Type))
+	if r.IsAPIErrorMessage && l.Model == "<synthetic>" {
+		var q quotaLimits
+		_ = json.Unmarshal(r.QuotaLimits, &q) // kein Objekt: keine Angaben
+		l.APIError = true
+		l.ErrInfo = protocol.ErrorLine{
+			APIErrorStatus: intIn(r.APIErrorStatus, protocol.MinAPIErrorStatus, protocol.MaxAPIErrorStatus),
+			Error:          valid(protocol.StopPattern, string(r.Error)),
+			RateLimitType:  valid(protocol.StopPattern, string(q.RateLimitType)),
+			LimitStatus:    valid(protocol.StopPattern, string(q.Status)),
+			OverageStatus:  valid(protocol.StopPattern, string(q.OverageStatus)),
+			IsUsingOverage: boolOf(q.IsUsingOverage), ResetsAt: intIn(q.ResetsAt, 0, protocol.MaxResetsAt),
+		}
+	}
 	var blocks []contentBlock
 	if json.Unmarshal(r.Message.Content, &blocks) == nil {
 		for _, c := range blocks {
@@ -194,9 +290,11 @@ type reqAgg struct {
 	sidechain                                   bool
 	usage                                       map[string]any // usage der Zeile mit dem größten output_tokens
 	usageOut                                    int64
-	tools                                       map[string]int
-	stop                                        string
-	n                                           int
+	// Angaben der usage-Zeile und, je Feld, der letzten Zeile, die es hat (fehlt es in der usage-Zeile).
+	usageDetails, lastDetails details
+	tools                     map[string]int
+	stop                      string
+	n                         int
 }
 
 func (a *reqAgg) add(l line) {
@@ -229,9 +327,10 @@ func (a *reqAgg) add(l line) {
 	if l.Usage != nil {
 		out := outputTokens(l.Usage)
 		if a.usage == nil || out >= a.usageOut {
-			a.usage, a.usageOut = l.Usage, out
+			a.usage, a.usageOut, a.usageDetails = l.Usage, out, l.Details
 		}
 	}
+	a.lastDetails = l.Details.or(a.lastDetails)
 }
 
 // outputTokens liest output_tokens; fehlt der Wert oder ist er keine ganze Zahl, gilt 0.
@@ -267,6 +366,7 @@ func (a *reqAgg) toLine(loc *time.Location, subagent bool) (protocol.RequestLine
 		return protocol.RequestLine{}, false
 	}
 	_, off := ts.In(loc).Zone()
+	d := a.usageDetails.or(a.lastDetails)
 	return protocol.RequestLine{
 		Kind: protocol.KindRequest, RequestID: f.RequestID, MessageID: f.MessageID, SessionID: f.SessionID,
 		UUID: valid(protocol.IDPattern, f.UUID), ParentUUID: valid(protocol.IDPattern, f.ParentUUID),
@@ -275,6 +375,26 @@ func (a *reqAgg) toLine(loc *time.Location, subagent bool) (protocol.RequestLine
 		Effort:         valid(protocol.StopPattern, a.effort), Entrypoint: valid(protocol.StopPattern, a.entrypoint),
 		CCVersion: valid(protocol.VersionPattern, a.version), StopReason: valid(protocol.StopPattern, a.stop),
 		Subagent: subagent || a.sidechain, Tools: a.tools,
+		PromptCacheRequested: d.promptCache, ToolInputStreamMs: d.toolStream, ThinkingDurationMs: d.thinking,
+		AttributionPlugin: d.plugin, AttributionAgent: d.agent, CacheMissReason: d.cacheMiss,
 		Usage: protocol.SanitizeUsage(a.usage),
 	}, true
+}
+
+// toErrorLine baut die Inhaltszeile eines API-Fehlers aus der ersten Zeile; ok ist false ohne Fehlerzeile oder mit
+// nicht lesbarem Zeitstempel. SessionID und AccountID setzt der Aufrufer, wenn nötig.
+func (a *reqAgg) toErrorLine(loc *time.Location, subagent bool) (protocol.ErrorLine, bool) {
+	f := a.first
+	ts, err := time.Parse(time.RFC3339Nano, f.Timestamp)
+	if !f.APIError || err != nil {
+		return protocol.ErrorLine{}, false
+	}
+	_, off := ts.In(loc).Zone()
+	e := f.ErrInfo
+	e.Kind, e.RequestID, e.MessageID, e.SessionID = protocol.KindError, f.RequestID, f.MessageID, f.SessionID
+	e.UUID, e.ParentUUID = valid(protocol.IDPattern, f.UUID), valid(protocol.IDPattern, f.ParentUUID)
+	e.TS, e.UTCOffsetMin = ts.UTC(), off/60
+	e.Entrypoint, e.CCVersion = valid(protocol.StopPattern, f.Entrypoint), valid(protocol.VersionPattern, f.Version)
+	e.Subagent = subagent || f.Sidechain
+	return e, true
 }

@@ -4,6 +4,20 @@ Was sich am Plugin für dich ändert. Format nach [Keep a Changelog](https://kee
 
 ## Unveröffentlicht
 
+## 0.9.0 – 2026-11-13
+
+### Neu
+
+- `/tokenlore:menu` öffnet ein Menü: oben stehen dein Gerät und der letzte Abgleich, darunter Status im Detail, E-Mail-Stufe ändern und Plugin aktualisieren. Aktualisieren und E-Mail-Stufe zeigen das Ergebnis zuerst, etwa „✓ Plugin ist aktuell (0.8.0)“ mit den ausgeführten Befehlen darunter; der Status nennt oben in einer Zeile Gerät und letzten Abgleich. Nach dem Aktualisieren steht `/reload-plugins` im Eingabefeld; Enter lädt die neue Version.
+- Je Anfrage gehen auch die angeforderte Cache-Dauer, wie lange Werkzeug-Eingaben gestreamt wurden und das Modell nachgedacht hat, Plugin und Agent, denen Claude Code die Anfrage zuordnet, und der Grund eines Cache-Fehlschlags an deinen Server.
+- API-Fehler wie ein erreichtes Nutzungslimit kommen ins Archiv und an den Server: Fehlerart, HTTP-Status und die Angaben zum Limit, nie der Fehlertext.
+- Kennt dein Server diese Angaben nicht, hält die Lieferung vor der ersten solchen Zeile an. `/tokenlore:sync`, `/tokenlore:status` und der Sitzungsstart sagen dir das; nach dem Aktualisieren des Servers geht der Rest beim nächsten Abgleich.
+
+### Geändert
+
+- `/tokenlore:email` meldet alte und neue Stufe, etwa „✓ E-Mail-Stufe: Aus → Voll“.
+- `/tokenlore:status` und `/tokenlore:email` stehen nicht mehr in der Liste beim Tippen von `/`; das Menü führt zu beiden. Getippt laufen sie wie gewohnt.
+
 ## 0.8.0 – 2026-11-13
 
 ### Neu
