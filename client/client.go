@@ -122,17 +122,39 @@ func (k SignKeys) validate() error {
 	return nil
 }
 
+// PairPredecessor sind die Felder zur Frage nach dem Vorgänger (protocol/doc.md, „Vorgänger“). Source ist
+// predecessor_source, Answer predecessor_answer (AnswerSame, AnswerNew, AnswerLater); leer heißt, das Feld fehlt.
+// Der Aufrufer setzt sie nur, wenn der Server das Merkmal FeaturePredecessor nennt.
+type PairPredecessor struct {
+	Source, Answer string
+}
+
+func (p PairPredecessor) validate() error {
+	if p.Source != "" && !protocol.ServerIDPattern.MatchString(p.Source) {
+		return errors.New("Kennung des Vorgängers ungültig")
+	}
+	switch p.Answer {
+	case "", AnswerSame, AnswerNew, AnswerLater:
+		return nil
+	}
+	return errors.New("Antwort auf die Frage nach dem Vorgänger ungültig")
+}
+
 // Pair tauscht den einmaligen Kopplungscode gegen Geräteschlüssel und CA-Fingerabdruck.
 // deviceSource ist die Kennung dieses Geräts für den Server (siehe protocol/doc.md, „Koppeln“). nameExplicit heißt,
 // der Name wurde mit --name gewählt: Nur dann ersetzt er beim Neukoppeln den Namen auf dem Server. Das Feld
 // device_name_explicit geht nur als true mit. plugin_version ist Version; sign die Signaturschlüssel dieses Rechners,
 // sign_public_keys_previous geht nur mit, wenn es frühere gibt. Ungültige Schlüssel gehen nie raus. serverID ist die
-// server_id aus Info; der Besitznachweis gilt nur für diesen Server.
-func (c *Client) Pair(ctx context.Context, code, name, goos, goarch, deviceSource, serverID string, nameExplicit bool, sign SignKeys) (PairResult, error) {
+// server_id aus Info; der Besitznachweis gilt nur für diesen Server. pred trägt predecessor_source und
+// predecessor_answer; fragt der Server nach dem Vorgänger, ist der Fehler ein *PredecessorQuestionError.
+func (c *Client) Pair(ctx context.Context, code, name, goos, goarch, deviceSource, serverID string, nameExplicit bool, sign SignKeys, pred PairPredecessor) (PairResult, error) {
 	if !protocol.ServerIDPattern.MatchString(serverID) {
 		return PairResult{}, errors.New("server_id fehlt oder ist ungültig")
 	}
 	if err := sign.validate(); err != nil {
+		return PairResult{}, err
+	}
+	if err := pred.validate(); err != nil {
 		return PairResult{}, err
 	}
 	reqBody, err := json.Marshal(struct {
@@ -146,7 +168,10 @@ func (c *Client) Pair(ctx context.Context, code, name, goos, goarch, deviceSourc
 		SignPublic    string   `json:"sign_public_key"`
 		SignProof     string   `json:"sign_public_key_proof"`
 		SignPrevious  []string `json:"sign_public_keys_previous,omitempty"`
-	}{code, name, nameExplicit, goos, goarch, Version, deviceSource, sign.Public, protocol.SignPairProof(sign.Priv, serverID, code), sign.Previous})
+		PredSource    string   `json:"predecessor_source,omitempty"`
+		PredAnswer    string   `json:"predecessor_answer,omitempty"`
+	}{code, name, nameExplicit, goos, goarch, Version, deviceSource, sign.Public, protocol.SignPairProof(sign.Priv, serverID, code), sign.Previous,
+		pred.Source, pred.Answer})
 	if err != nil {
 		return PairResult{}, err
 	}
@@ -156,6 +181,14 @@ func (c *Client) Pair(ctx context.Context, code, name, goos, goarch, deviceSourc
 	}
 	if status == http.StatusUnauthorized {
 		return PairResult{}, ErrBadCode
+	}
+	if status == http.StatusConflict {
+		if q, isQuestion := predecessorQuestion(body, tooBig); isQuestion {
+			if q == nil {
+				return PairResult{}, errors.New("Frage des Servers nach dem Vorgänger nicht lesbar")
+			}
+			return PairResult{}, q
+		}
 	}
 	if status != http.StatusOK {
 		err := mapStatus(status, hdr, body, tooBig, "")

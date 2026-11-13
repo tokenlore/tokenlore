@@ -35,7 +35,8 @@ Jede Anfrage und jeder Tag der Vorgeschichte steht im Archiv des Plugins als sig
 | `complete_before` | `^[0-9]{4}-[0-9]{2}-[0-9]{2}$` (10 Zeichen) und ein gültiges Kalenderdatum; darf in der Zukunft liegen |
 | Gerätename | 1 – 64 Zeichen, gültiges UTF-8, keine Steuer- und Formatzeichen |
 | Geräteschlüssel | `^tl_dk_[A-Za-z0-9_-]{43}$` |
-| `device_source`, `server_id` | `^[0-9a-f]{64}$` (genau 64 Hex-Zeichen, klein) |
+| `device_source`, `predecessor_source`, `server_id` | `^[0-9a-f]{64}$` (genau 64 Hex-Zeichen, klein) |
+| `predecessor_answer` | `same`, `new` oder `later`, genau so geschrieben |
 
 Plugin und Server prüfen jedes Paket nach diesen Regeln, jeder mit einer eigenen Umsetzung; diese Datei ist für beide maßgeblich. Die Umsetzung des Plugins steht in `protocol/validate.go` im Repo tokenlore/tokenlore. Das Plugin lässt ungültige oder falsch signierte Zeilen vor dem Senden weg (mit Warnung), damit eine einzelne Zeile nie den ganzen Abgleich blockiert. Bei einem Konto mit ungültiger Adresse sendet das Plugin das Konto ohne Adresse.
 
@@ -213,6 +214,8 @@ Antwort 200, JSON:
 
 - `server_id` (string): Kennung dieses Servers, 64 Hex-Zeichen, klein (32 zufällige Byte). Sie entsteht bei der Einrichtung, steht in der Datenbank und ändert sich nie; ein Umzug mit derselben Datenbank behält sie.
 - `min_plugin_version` (string): die älteste Plugin-Version, die der Server annimmt, `x.y.z`
+- `features` (Liste von Texten): Merkmale, die der Server über die Grundform des Protokolls hinaus kennt. Fehlt das Feld, gilt eine leere Liste. Unbekannte Einträge übergeht das Plugin. Bekannt ist:
+  - `predecessor`: Der Server nimmt beim Koppeln `predecessor_source` und `predecessor_answer` an und kann nach dem Vorgänger fragen (siehe „Koppeln“, „Vorgänger“). Ein Server ohne dieses Merkmal lehnt die beiden Felder als unbekannt mit 400 ab; das Plugin sendet sie ihm deshalb nie.
 
 Fehler: 429 bei zu vielen Abrufen von derselben IP-Adresse, mit `Retry-After`; 503 bei alter Datenbank (siehe „Alte Datenbank“). Ohne Antwort 200 koppelt das Plugin nicht.
 
@@ -250,6 +253,8 @@ Vor dem Koppeln holt das Plugin `GET /api/plugin/info` und bildet daraus `device
 | `sign_public_key` | string | öffentlicher Ed25519-Schlüssel, mit dem dieses Gerät seine Zeilen signiert, Base64 |
 | `sign_public_key_proof` | string | Besitznachweis für `sign_public_key`: Ed25519-Signatur über `server_id` und Kopplungscode, Base64 (siehe unten) |
 | `sign_public_keys_previous` | string[], optional | öffentliche Teile früherer, ersetzter Signaturschlüssel dieses Geräts, je Base64; fehlt das Feld, gilt eine leere Liste |
+| `predecessor_source` | string, optional | Kennung des Rechners, von dem dieser Konfigurationsordner stammt, für diesen Server (siehe „Vorgänger“); nur wenn `features` das Merkmal `predecessor` nennt |
+| `predecessor_answer` | string, optional | Antwort auf die Frage nach dem Vorgänger: `same`, `new` oder `later` (siehe „Vorgänger“); nur wenn `features` das Merkmal `predecessor` nennt |
 
 **Berechnung von `device_source`:** HMAC-SHA256, Schlüssel ist die Kennung aus der Kennungsdatei `tokenlore-id` im Claude-Konfigurationsordner als Text (32 Hex-Zeichen, klein), Nachricht die `server_id` aus `GET /api/plugin/info` als Text (64 Hex-Zeichen, klein); gesendet wird das Ergebnis als 64 Hex-Zeichen, klein. Ohne die Kennung ist es nicht zurückzurechnen, und jeder Server bekommt ein anderes. Zieht der Server mit seiner Datenbank auf eine andere Adresse um, bleibt `device_source` gleich. Der Server speichert `device_source` nicht roh, sondern je Benutzer als Hex-HMAC-SHA256 mit einem eigenen Salz des Benutzers als Schlüssel, das den Server nie verlässt; derselbe Rechner ist so unter zwei Konten desselben Servers in der Datenbank nicht verknüpfbar.
 
@@ -279,7 +284,42 @@ Der Server prüft ihn direkt nach dem Format von `sign_public_key` und vor dem E
 
 PHP: `sodium_crypto_sign_verify_detached($nachweis, "tokenlore-pair-v2\n" . $server_id . "\n" . $code, $schluessel)`. Beispiel mit dem Testschlüssel der Beispielzeile, der `server_id` `0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef` und dem Code `123456`: `POAMORdew63MOoD3kpQ0xtbrIjADFFCt53mdL1X+2vwbfJ9Lj8f0zFXlqy7NHy9PKXVUO4cXuzgOpMU/VHZyDA==`.
 
-Ein Rechner bleibt beim selben Benutzer ein Gerät: Kennt der Server `device_source` schon bei einem Gerät dieses Benutzers, koppelt er dieses Gerät neu (neuer Geräteschlüssel, alle alten Geräteschlüssel gesperrt, eine Sperre des Geräts aufgehoben, Betriebssystem und Architektur übernommen, Daten und bekannte Signaturschlüssel unverändert; den Namen ersetzt `device_name` nur bei `device_name_explicit: true`, sonst bleibt der bisherige, etwa auf der Webseite vergebene Name); sonst legt er ein neues Gerät an. Ein Kopplungscode für ein bestehendes Gerät koppelt genau dieses Gerät neu und übernimmt eine noch unbekannte Kennung.
+Ein Rechner bleibt beim selben Benutzer ein Gerät: Kennt der Server `device_source` schon bei einem Gerät dieses Benutzers, koppelt er dieses Gerät neu (neuer Geräteschlüssel, alle alten Geräteschlüssel gesperrt, eine Sperre des Geräts aufgehoben, Betriebssystem und Architektur übernommen, Daten und bekannte Signaturschlüssel unverändert; den Namen ersetzt `device_name` nur bei `device_name_explicit: true`, sonst bleibt der bisherige, etwa auf der Webseite vergebene Name); sonst legt er ein neues Gerät an oder fragt nach dem Vorgänger (siehe „Vorgänger“). Ein Kopplungscode für ein bestehendes Gerät koppelt genau dieses Gerät neu und übernimmt eine noch unbekannte Kennung.
+
+**Vorgänger:** Ein Konfigurationsordner, der von einem anderen Rechner stammt (kopiert oder aus einer Sicherung zurückgeholt), bekommt beim Koppeln eine neue Kennung; die alte steht als `predecessor` in der Kennungsdatei `tokenlore-id`. Der Server weiß damit nicht, ob der Rechner das alte Gerät ist (Rechner neu aufgesetzt) oder ein zweiter (Ordner auf einen weiteren Rechner kopiert). Er fragt deshalb einmal nach, und der Nutzer entscheidet; der Server entscheidet nie selbst.
+
+- **`predecessor_source`:** dieselbe Rechnung wie `device_source`, mit der Kennung aus `predecessor` als Schlüssel: HMAC-SHA256 über die `server_id` als Text, gesendet als 64 Hex-Zeichen, klein. Das Plugin sendet das Feld nur, wenn `predecessor` nicht leer ist und `features` in `GET /api/plugin/info` das Merkmal `predecessor` nennt; sonst fehlt es, und der Server koppelt wie ohne Vorgänger. Der Server speichert `predecessor_source` nicht; er vergleicht es nur mit den gespeicherten Kennungen der Geräte des Benutzers.
+- **Wann der Server fragt:** wenn alles zutrifft:
+  1. Der Kopplungscode gilt nicht für ein bestimmtes Gerät.
+  2. `device_source` ist bei keinem Gerät dieses Benutzers bekannt.
+  3. `predecessor_source` ist bei einem Gerät A desselben Benutzers bekannt. Wurde das Gerät mit dieser Kennung in ein anderes gelegt, ist A dieses andere Gerät, denn beim Zusammenlegen wandern die Kennungen mit. Ist das Gerät gelöscht, ist die Kennung unbekannt, und der Server fragt nicht. Ein gesperrtes Gerät A zählt wie jedes andere.
+  4. Für das Paar aus diesem Rechner und A gibt es keinen Eintrag (offen oder abgelehnt).
+  5. `predecessor_answer` fehlt.
+
+  Gehört `predecessor_source` einem Gerät eines anderen Benutzers, fragt der Server nicht und nennt das andere Gerät nie. Weil nach `new` und `later` das neue Gerät `device_source` kennt, fragt der Server für denselben Ordner nur einmal.
+- **Die Frage:** Antwort 409 (Feldnamen siehe unten). Der Server prüft vorher alles andere wie sonst (400, 401, 426, wiederholter Besitznachweis); die Frage kommt erst, wenn das Koppeln ohne sie gelingen würde. Er ändert nichts: Der Code bleibt gültig, und der Besitznachweis gilt nicht als verbraucht, damit das Plugin mit demselben Code und demselben Nachweis und dazu `predecessor_answer` erneut koppeln kann. Der Code läuft dabei nicht länger als sonst.
+- **Antwort `same`** (dieser Rechner ist A): Der Server koppelt A neu, so wie mit einem Kopplungscode für A: neuer Geräteschlüssel für A, alle älteren Geräteschlüssel von A gesperrt mit Grund `repaired`, eine Sperre von A aufgehoben, Betriebssystem und Architektur übernommen, Name wie beim Neukoppeln (nur mit `device_name_explicit: true` ersetzt), Daten bleiben. `device_source` kommt als weitere Kennung zu A, die alte bleibt. Signaturschlüssel wie bei jedem Koppeln. Antwort 200 mit der Nummer von A und `repaired: true`. Ein laufender anderer Rechner mit dem alten Schlüssel liefert danach nicht mehr (Meldung „Dieses Gerät wurde anderswo neu gekoppelt …“), bis er neu gekoppelt wird.
+- **Antwort `new`** (anderer Rechner): Der Server legt ein neues Gerät B an wie sonst und merkt das Paar B, A als abgelehnt. Danach fragt er für dieses Paar nie wieder, weder beim Koppeln noch auf der Webseite, und schlägt die beiden auch nicht zum Zusammenlegen vor, selbst bei gleichen Tagen. Antwort 200 wie beim Anlegen eines Geräts, `repaired: false`.
+- **Antwort `later`** (später entscheiden): Der Server legt B an wie bei `new` und merkt das Paar als offen. Die Webseite des Servers zeigt dann in der Geräteliste die Frage; „Ja“ dort legt B in A zusammen und sperrt die Geräteschlüssel, die A vorher hatte, mit Grund `repaired`, „Nein“ merkt das Paar als abgelehnt. Antwort 200 wie bei `new`.
+- **Antwort ohne Frage:** Sendet das Plugin `predecessor_answer`, obwohl keine Frage ansteht (kein oder unbekanntes `predecessor_source`, Paar schon mit Eintrag, `device_source` schon bekannt, Code für ein bestimmtes Gerät), übergeht der Server die Antwort und koppelt wie ohne sie. Ein ungültiger Wert ist trotzdem ein Fehler 400.
+
+Antwort 409 bei einer Frage, JSON:
+
+```json
+{"error":"predecessor_question","predecessor":{"device_id":7,"name":"Laptop","last_seen_at":"2026-11-12T08:15:00Z","os":"linux","arch":"amd64","recent":true,"sign_key_match":false},"recommended":"new"}
+```
+
+- `error` (string): immer `predecessor_question`; daran erkennt das Plugin die Frage
+- `predecessor` (Objekt): Angaben zu Gerät A
+  - `device_id` (int): Nummer von A
+  - `name` (string): Gerätename von A
+  - `last_seen_at` (string oder `null`): Zeitpunkt der letzten Lieferung von A, UTC, wie `ts` (Millisekunden nur, wenn nicht 0); `null`, wenn A nie geliefert hat
+  - `os` (string), `arch` (string): Betriebssystem und Architektur von A, Werte wie beim Koppeln
+  - `recent` (bool): `true`, wenn die letzte Lieferung von A weniger als 24 Stunden zurückliegt (Uhr des Servers); dann ist A wahrscheinlich in Gebrauch
+  - `sign_key_match` (bool): `true`, wenn `sign_public_key` oder ein Eintrag von `sign_public_keys_previous` ein Signaturschlüssel von A ist
+- `recommended` (string): `new`, wenn `recent` gilt, sonst `same`. Ein anderes Betriebssystem oder eine andere Architektur ändert die Empfehlung nicht, weil eine Neuinstallation beides wechseln kann.
+
+Der Server liefert nur Angaben und Empfehlung. Fragetext, Warnung und die Folgen jeder Antwort formuliert das Plugin; es fragt den Nutzer und koppelt danach mit demselben Code und `predecessor_answer` erneut. Ohne Antwort koppelt es nicht.
 
 Antwort 200, JSON:
 
@@ -293,9 +333,10 @@ Das Plugin speichert `server_id` mit der Verbindung.
 
 Fehler:
 
-- 400: Feld fehlt, hat den falschen Typ (`device_name_explicit` kein Boolean, `sign_public_keys_previous` keine Liste von Texten, sonst kein Text) oder verletzt eine Prüfregel; ein fehlender oder falscher Besitznachweis mit `path` `sign_public_key_proof`, der Code bleibt dann gültig
+- 400: Feld fehlt, hat den falschen Typ (`device_name_explicit` kein Boolean, `sign_public_keys_previous` keine Liste von Texten, sonst kein Text) oder verletzt eine Prüfregel; ein fehlender oder falscher Besitznachweis mit `path` `sign_public_key_proof`, der Code bleibt dann gültig; ein ungültiges `predecessor_source` oder `predecessor_answer` mit dem Feld als `path`
 - 401: Kopplungscode unbekannt, abgelaufen oder schon eingelöst
 - 409 `{"error":"source_taken"}`: Der Code gilt für ein bestehendes Gerät, `device_source` gehört aber einem anderen Gerät desselben Benutzers; nichts wird geändert
+- 409 `{"error":"predecessor_question",…}`: Frage nach dem Vorgänger (siehe „Vorgänger“); nichts wird geändert, der Code bleibt gültig
 - 426 `{"error":"plugin_outdated","min_plugin_version":"x.y.z"}`: `plugin_version` ist älter als die Mindestversion; der Code bleibt gültig
 - 503 mit `reason` `old_database`: Datenbank des Servers zu alt (siehe „Alte Datenbank“)
 

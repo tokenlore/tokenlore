@@ -226,3 +226,76 @@ func outdatedMin(body []byte, tooBig bool) string {
 	}
 	return ""
 }
+
+// Antworten auf die Frage nach dem Vorgänger (protocol/doc.md, „Vorgänger“).
+const (
+	AnswerSame  = "same"  // dieser Rechner ist das alte Gerät A
+	AnswerNew   = "new"   // anderer Rechner, eigenes Gerät, nie wieder fragen
+	AnswerLater = "later" // eigenes Gerät, die Webseite fragt weiter
+)
+
+// PredecessorDevice sind die Angaben des Servers zum Gerät A, von dem dieser Konfigurationsordner stammt. Name, OS und
+// Arch sind bereinigt; LastSeenAt ist nil, wenn A nie geliefert hat oder der Server keinen gültigen Zeitpunkt nennt.
+type PredecessorDevice struct {
+	DeviceID     int64
+	Name         string
+	LastSeenAt   *time.Time
+	OS, Arch     string
+	Recent       bool // A hat in den letzten 24 Stunden geliefert und scheint in Gebrauch
+	SignKeyMatch bool // ein gesendeter Signaturschlüssel gehört A
+}
+
+// PredecessorQuestionError: Der Server fragt vor dem Koppeln, ob dieser Rechner das Gerät A ist (409
+// predecessor_question). Nichts ist geändert, der Code bleibt gültig. Recommended ist AnswerSame oder AnswerNew.
+type PredecessorQuestionError struct {
+	Predecessor PredecessorDevice
+	Recommended string
+}
+
+func (e *PredecessorQuestionError) Error() string {
+	return "Der Server fragt, ob dieser Rechner das Gerät „" + e.Predecessor.Name + "“ ist"
+}
+
+// predecessorQuestion liest den Rumpf eines 409. ok ist false, wenn er keine Frage nach dem Vorgänger ist oder die
+// Angaben zu A unbrauchbar sind (keine Nummer, kein Name).
+func predecessorQuestion(body []byte, tooBig bool) (q *PredecessorQuestionError, isQuestion bool) {
+	if tooBig {
+		return nil, false
+	}
+	var v struct {
+		Error       string `json:"error"`
+		Predecessor *struct {
+			DeviceID     int64  `json:"device_id"`
+			Name         string `json:"name"`
+			LastSeenAt   string `json:"last_seen_at"`
+			OS           string `json:"os"`
+			Arch         string `json:"arch"`
+			Recent       bool   `json:"recent"`
+			SignKeyMatch bool   `json:"sign_key_match"`
+		} `json:"predecessor"`
+		Recommended string `json:"recommended"`
+	}
+	if json.Unmarshal(body, &v) != nil || v.Error != "predecessor_question" {
+		return nil, false
+	}
+	p := v.Predecessor
+	if p == nil || p.DeviceID <= 0 || Clean(p.Name) == "" {
+		return nil, true
+	}
+	d := PredecessorDevice{DeviceID: p.DeviceID, Name: Clean(p.Name), OS: Clean(p.OS), Arch: Clean(p.Arch),
+		Recent: p.Recent, SignKeyMatch: p.SignKeyMatch}
+	if protocol.TSPattern.MatchString(p.LastSeenAt) {
+		if t, err := time.Parse(time.RFC3339Nano, p.LastSeenAt); err == nil {
+			d.LastSeenAt = &t
+		}
+	}
+	// Die Empfehlung folgt laut Protokoll aus recent; nennt der Server keine gültige, gilt diese Regel.
+	rec := v.Recommended
+	if rec != AnswerSame && rec != AnswerNew {
+		rec = AnswerSame
+		if p.Recent {
+			rec = AnswerNew
+		}
+	}
+	return &PredecessorQuestionError{Predecessor: d, Recommended: rec}, true
+}

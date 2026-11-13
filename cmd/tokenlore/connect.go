@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/x509"
 	"errors"
@@ -40,7 +41,7 @@ var (
 	fpPiece = regexp.MustCompile(`^[0-9A-Fa-f:]+$`)
 )
 
-const connectUsage = "Aufruf: /tokenlore:connect <url> <code> [--ca <fingerabdruck>] [--name <name>]"
+const connectUsage = "Aufruf: /tokenlore:connect <url> <code> [--ca <fingerabdruck>] [--name <name>] [--vorgaenger gleich|neu|spaeter]"
 
 // flagMessage übersetzt Fehler des flag-Pakets; Nutzereingaben darin werden bereinigt.
 func flagMessage(err error) string {
@@ -49,6 +50,9 @@ func flagMessage(err error) string {
 		return "Unbekannte Option -" + client.Clean(name)
 	}
 	if name, ok := strings.CutPrefix(msg, "flag needs an argument: "); ok {
+		if strings.TrimLeft(name, "-") == "vorgaenger" {
+			return "Option --vorgaenger braucht einen Wert: gleich, neu oder spaeter"
+		}
 		return "Option -" + client.Clean(name) + " braucht einen Wert"
 	}
 	return "Ungültige Angabe: " + client.Clean(msg)
@@ -104,13 +108,38 @@ func runConnect(ctx context.Context, args []string, out io.Writer, dataDir, conf
 	fs.SetOutput(io.Discard) // eigene, deutsche Meldungen statt der englischen des flag-Pakets
 	caFlag := fs.String("ca", "", "CA-Fingerabdruck aus dem Befehl auf der Webseite unter „Geräte“")
 	nameFlag := fs.String("name", "", "Gerätename (Standard: Rechnername)")
+	predFlag := fs.String("vorgaenger", "", "Antwort auf die Frage nach dem Vorgänger: gleich, neu oder spaeter")
+	// --frage-json: Die Frage nach dem Vorgänger kommt als JSON für das Auswahlfenster (plugin/hooks/connect.ts).
+	questionJSON := fs.Bool("frage-json", false, "Frage nach dem Vorgänger als JSON")
 	pos, err := parseInterspersed(fs, args)
 	if err != nil {
 		fmt.Fprintf(out, "%s.\n%s\n", flagMessage(err), connectUsage)
 		return 2
 	}
-	caGiven := false
-	fs.Visit(func(f *flag.Flag) { caGiven = caGiven || f.Name == "ca" })
+	caGiven, predGiven := false, false
+	fs.Visit(func(f *flag.Flag) {
+		caGiven = caGiven || f.Name == "ca"
+		predGiven = predGiven || f.Name == "vorgaenger"
+	})
+	// Mit --frage-json ist die Ausgabe bei einer Frage nur das JSON; was connect davor meldet (etwa zur Kennungsdatei),
+	// kommt darin als "before" mit. Ohne Frage geht alles unverändert hinaus.
+	var jsonOut io.Writer
+	var before bytes.Buffer
+	if *questionJSON {
+		jsonOut, out = out, &before
+		defer func() {
+			if jsonOut != nil {
+				jsonOut.Write(before.Bytes())
+			}
+		}()
+	}
+	var predAnswer string
+	if predGiven {
+		if predAnswer, err = parsePredecessorAnswer(*predFlag); err != nil {
+			fmt.Fprintf(out, "%s\n%s\n", err, connectUsage)
+			return 2
+		}
+	}
 	ca := strings.Join(strings.Fields(*caFlag), "")
 	switch {
 	case len(pos) == 0:
@@ -201,8 +230,27 @@ func runConnect(ctx context.Context, args []string, out io.Writer, dataDir, conf
 		fmt.Fprintf(out, "%s – Kopplung abgebrochen.\n", client.Clean(err.Error()))
 		return 1
 	}
+	// Vorgänger und Antwort gehen nur an einen Server, der sie kennt; ein älterer lehnte sie mit 400 ab.
+	var pred client.PairPredecessor
+	if info.Has(client.FeaturePredecessor) {
+		pred = client.PairPredecessor{Source: claudecode.PredecessorSource(ident, info.ServerID), Answer: predAnswer}
+	}
 	// Nur ein mit --name gewählter Name ersetzt beim Neukoppeln den auf dem Server (etwa auf der Webseite vergebenen).
-	res, err := c.Pair(ctx, pos[1], name, runtime.GOOS, runtime.GOARCH, claudecode.DeviceSource(ident.ID, info.ServerID), info.ServerID, *nameFlag != "", sk.Keys)
+	res, err := c.Pair(ctx, pos[1], name, runtime.GOOS, runtime.GOARCH, claudecode.DeviceSource(ident.ID, info.ServerID), info.ServerID, *nameFlag != "", sk.Keys, pred)
+	var question *client.PredecessorQuestionError
+	if errors.As(err, &question) {
+		// Nichts gekoppelt, nichts gespeichert: Der Nutzer antwortet mit demselben Code und --vorgaenger.
+		cmd := connectCommand{URL: base.String(), Code: pos[1], CA: pinned, Name: *nameFlag}
+		p := predecessorPrompt(question, cmd, runtime.GOOS, runtime.GOARCH, time.Now())
+		if jsonOut != nil {
+			p.Before = before.String()
+			fmt.Fprint(jsonOut, p.json())
+			jsonOut = nil
+		} else {
+			fmt.Fprint(out, p.text())
+		}
+		return exitPredecessorQuestion
+	}
 	var outdated *client.OutdatedError
 	if errors.As(err, &outdated) {
 		fmt.Fprintf(out, "Kopplung abgelehnt: Diese tokenlore-Version ist dem Server zu alt. %s Der Kopplungscode bleibt gültig.\n", deliver.OutdatedMessage(outdated.Min))
@@ -342,7 +390,7 @@ func resolveIdentity(out io.Writer, dataDir, configDir string) (id state.Identit
 	}
 	switch {
 	case claudecode.MachineConflict(id, machine):
-		fmt.Fprintf(out, "Die Kennungsdatei %s stammt von einem anderen Rechner; dieser Rechner wird ein eigenes Gerät.\n", claudecode.IdentityFile)
+		fmt.Fprintf(out, "Die Kennungsdatei %s stammt von einem anderen Rechner; dieser Rechner bekommt eine eigene Kennung.\n", claudecode.IdentityFile)
 		id, err = claudecode.ForkIdentity(configDir, id, machine)
 	case machine != "" && id.Machine == "":
 		// Die Systemkennung war beim Anlegen unbekannt: ab jetzt ist die Datei an diesen Rechner gebunden.

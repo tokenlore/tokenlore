@@ -332,3 +332,13 @@ func TestDeviceSource(t *testing.T) {
 
 // wantDeviceSource ist unabhängig berechnet: printf '<testServerID>' | openssl dgst -sha256 -hmac <testID>.
 const wantDeviceSource = "dddc24d31d6d35592983d024cbbb760a62ab847ed623e2a07fd35410e2858694"
+
+// predecessor_source ist dieselbe Rechnung wie device_source mit der Kennung des Vorgängers; ohne Vorgänger leer.
+func TestPredecessorSource(t *testing.T) {
+	if got := PredecessorSource(state.Identity{ID: otherID, Predecessor: testID}, testServerID); got != wantDeviceSource {
+		t.Fatalf("predecessor_source %s, want %s", got, wantDeviceSource)
+	}
+	if got := PredecessorSource(state.Identity{ID: otherID}, testServerID); got != "" {
+		t.Fatalf("ohne Vorgänger %q", got)
+	}
+}

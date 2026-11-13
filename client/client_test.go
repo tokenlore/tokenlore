@@ -155,7 +155,7 @@ func TestClientDoesNotFollowRedirect(t *testing.T) {
 	if strings.Contains(err.Error(), testKey) {
 		t.Fatal("Schlüssel im Fehler")
 	}
-	if _, err := c.Pair(context.Background(), "code", "n", "linux", "amd64", testSource, testServerID, false, testSign); err == nil || hit.Load() {
+	if _, err := c.Pair(context.Background(), "code", "n", "linux", "amd64", testSource, testServerID, false, testSign, PairPredecessor{}); err == nil || hit.Load() {
 		t.Fatalf("Pair folgt Weiterleitung: %v", err)
 	}
 }
@@ -321,7 +321,7 @@ func TestPairSendsSignKeysAndVersion(t *testing.T) {
 	var sent string
 	srv := pairServer(t, root, 200, good, &sent)
 	c := newClient(t, srv.URL, root, 5*time.Second)
-	if _, err := c.Pair(context.Background(), "c", "n", "linux", "amd64", testSource, testServerID, false, testSign); err != nil {
+	if _, err := c.Pair(context.Background(), "c", "n", "linux", "amd64", testSource, testServerID, false, testSign, PairPredecessor{}); err != nil {
 		t.Fatal(err)
 	}
 	var body map[string]any
@@ -339,7 +339,7 @@ func TestPairSendsSignKeysAndVersion(t *testing.T) {
 		t.Fatalf("leere Liste mitgeschickt: %s", sent)
 	}
 	if _, err := c.Pair(context.Background(), "c", "n", "linux", "amd64", testSource, testServerID, false,
-		SignKeys{Public: testSignPub, Priv: testSignPriv, Previous: []string{testSignPrev}}); err != nil {
+		SignKeys{Public: testSignPub, Priv: testSignPriv, Previous: []string{testSignPrev}}, PairPredecessor{}); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(sent, `"sign_public_keys_previous":["`+testSignPrev+`"]`) {
@@ -366,12 +366,12 @@ func TestPairRejectsBadSignKeys(t *testing.T) {
 		"fremder privater":   {Public: testSignPub, Priv: ed25519.NewKeyFromSeed(make([]byte, 32))},
 		"privater zu kurz":   {Public: testSignPub, Priv: testSignPriv[:10]},
 	} {
-		if _, err := c.Pair(context.Background(), "c", "n", "linux", "amd64", testSource, testServerID, false, k); err == nil {
+		if _, err := c.Pair(context.Background(), "c", "n", "linux", "amd64", testSource, testServerID, false, k, PairPredecessor{}); err == nil {
 			t.Errorf("%s: angenommen", name)
 		}
 	}
 	for _, sid := range []string{"", strings.ToUpper(testServerID), testServerID[:63]} {
-		if _, err := c.Pair(context.Background(), "c", "n", "linux", "amd64", testSource, sid, false, testSign); err == nil {
+		if _, err := c.Pair(context.Background(), "c", "n", "linux", "amd64", testSource, sid, false, testSign, PairPredecessor{}); err == nil {
 			t.Errorf("server_id %q: angenommen", sid)
 		}
 	}
@@ -393,7 +393,7 @@ func TestPairSignKeysRefused(t *testing.T) {
 		base + `,"sign_keys_refused":["` + testSignPub + `","` + testSignPrev + `"]}`: {testSignPub, testSignPrev},
 	} {
 		srv := pairServer(t, root, 200, body, nil)
-		res, err := newClient(t, srv.URL, root, 5*time.Second).Pair(context.Background(), "c", "n", "linux", "amd64", testSource, testServerID, false, keys)
+		res, err := newClient(t, srv.URL, root, 5*time.Second).Pair(context.Background(), "c", "n", "linux", "amd64", testSource, testServerID, false, keys, PairPredecessor{})
 		if err != nil {
 			t.Fatalf("%s: %v", body, err)
 		}
@@ -427,7 +427,7 @@ func TestPairValidatesResponse(t *testing.T) {
 
 	var sent string
 	srv := pairServer(t, root, 200, good, &sent)
-	res, err := newClient(t, srv.URL, root, 5*time.Second).Pair(context.Background(), "ABCD-1234", "Laptop", "linux", "amd64", testSource, testServerID, false, testSign)
+	res, err := newClient(t, srv.URL, root, 5*time.Second).Pair(context.Background(), "ABCD-1234", "Laptop", "linux", "amd64", testSource, testServerID, false, testSign, PairPredecessor{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -442,7 +442,7 @@ func TestPairValidatesResponse(t *testing.T) {
 	if strings.Contains(sent, "device_name_explicit") {
 		t.Errorf("device_name_explicit ohne ausdrücklichen Namen mitgeschickt: %s", sent)
 	}
-	if _, err := newClient(t, srv.URL, root, 5*time.Second).Pair(context.Background(), "ABCD-1234", "Laptop", "linux", "amd64", testSource, testServerID, true, testSign); err != nil {
+	if _, err := newClient(t, srv.URL, root, 5*time.Second).Pair(context.Background(), "ABCD-1234", "Laptop", "linux", "amd64", testSource, testServerID, true, testSign, PairPredecessor{}); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(sent, `"device_name_explicit":true`) {
@@ -459,7 +459,7 @@ func TestPairValidatesResponse(t *testing.T) {
 	}
 	for name, body := range bad {
 		srv := pairServer(t, root, 200, body, nil)
-		_, err := newClient(t, srv.URL, root, 5*time.Second).Pair(context.Background(), "c", "n", "linux", "amd64", testSource, testServerID, false, testSign)
+		_, err := newClient(t, srv.URL, root, 5*time.Second).Pair(context.Background(), "c", "n", "linux", "amd64", testSource, testServerID, false, testSign, PairPredecessor{})
 		if err == nil {
 			t.Errorf("%s: angenommen", name)
 		} else if strings.Contains(err.Error(), "tl_dk_") {
@@ -472,19 +472,19 @@ func TestPairValidatesResponse(t *testing.T) {
 		strings.Replace(good, "}", `,"repaired":false}`, 1): false,
 	} {
 		srv := pairServer(t, root, 200, body, nil)
-		res, err := newClient(t, srv.URL, root, 5*time.Second).Pair(context.Background(), "c", "n", "linux", "amd64", testSource, testServerID, false, testSign)
+		res, err := newClient(t, srv.URL, root, 5*time.Second).Pair(context.Background(), "c", "n", "linux", "amd64", testSource, testServerID, false, testSign, PairPredecessor{})
 		if err != nil || res.Repaired != want {
 			t.Errorf("repaired %v: %+v %v", want, res.Repaired, err)
 		}
 	}
 
 	srv = pairServer(t, root, 401, `{"error":"Code ungültig"}`, nil)
-	if _, err := newClient(t, srv.URL, root, 5*time.Second).Pair(context.Background(), "c", "n", "linux", "amd64", testSource, testServerID, false, testSign); !errors.Is(err, ErrBadCode) {
+	if _, err := newClient(t, srv.URL, root, 5*time.Second).Pair(context.Background(), "c", "n", "linux", "amd64", testSource, testServerID, false, testSign, PairPredecessor{}); !errors.Is(err, ErrBadCode) {
 		t.Errorf("401: %v", err)
 	}
 	srv = pairServer(t, root, 429, `{"error":"zu viele"}`, nil)
 	var re *RetryError
-	if _, err := newClient(t, srv.URL, root, 5*time.Second).Pair(context.Background(), "c", "n", "linux", "amd64", testSource, testServerID, false, testSign); !errors.As(err, &re) {
+	if _, err := newClient(t, srv.URL, root, 5*time.Second).Pair(context.Background(), "c", "n", "linux", "amd64", testSource, testServerID, false, testSign, PairPredecessor{}); !errors.As(err, &re) {
 		t.Errorf("429: %v", err)
 	}
 }
@@ -740,7 +740,7 @@ func TestIngestPathUnderSubdir(t *testing.T) {
 			t.Errorf("Ingest-Pfad %q, erwartet %q", got, sub+"/api/plugin/ingest")
 		}
 		got = ""
-		_, _ = c.Pair(context.Background(), "123456", "n", "linux", "amd64", testSource, testServerID, false, testSign)
+		_, _ = c.Pair(context.Background(), "123456", "n", "linux", "amd64", testSource, testServerID, false, testSign, PairPredecessor{})
 		if got != sub+"/api/plugin/pair" {
 			t.Errorf("Pair-Pfad %q, erwartet %q", got, sub+"/api/plugin/pair")
 		}
@@ -771,7 +771,7 @@ func TestPairAcceptsEmptyFingerprint(t *testing.T) {
 	root := testpki.NewRoot(t)
 	body := `{"device_id":7,"device_key":"` + testKey + `","ca_fingerprint":""}`
 	srv := pairServer(t, root, 200, body, nil)
-	res, err := newClient(t, srv.URL, root, 5*time.Second).Pair(context.Background(), "c", "n", "linux", "amd64", testSource, testServerID, false, testSign)
+	res, err := newClient(t, srv.URL, root, 5*time.Second).Pair(context.Background(), "c", "n", "linux", "amd64", testSource, testServerID, false, testSign, PairPredecessor{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -784,12 +784,12 @@ func TestPairAcceptsEmptyFingerprint(t *testing.T) {
 func TestPairSourceTaken(t *testing.T) {
 	root := testpki.NewRoot(t)
 	srv := pairServer(t, root, 409, `{"error":"source_taken"}`, nil)
-	_, err := newClient(t, srv.URL, root, 5*time.Second).Pair(context.Background(), "c", "n", "linux", "amd64", testSource, testServerID, false, testSign)
+	_, err := newClient(t, srv.URL, root, 5*time.Second).Pair(context.Background(), "c", "n", "linux", "amd64", testSource, testServerID, false, testSign, PairPredecessor{})
 	if !errors.Is(err, ErrSourceTaken) {
 		t.Fatalf("source_taken: %v", err)
 	}
 	other := pairServer(t, root, 409, `{"error":"anders"}`, nil)
-	_, err = newClient(t, other.URL, root, 5*time.Second).Pair(context.Background(), "c", "n", "linux", "amd64", testSource, testServerID, false, testSign)
+	_, err = newClient(t, other.URL, root, 5*time.Second).Pair(context.Background(), "c", "n", "linux", "amd64", testSource, testServerID, false, testSign, PairPredecessor{})
 	if err == nil || errors.Is(err, ErrSourceTaken) {
 		t.Fatalf("anderer 409: %v", err)
 	}
@@ -849,7 +849,7 @@ func TestRequestsCarryUserAgent(t *testing.T) {
 	if _, err := c.Ingest(context.Background(), testKey, []byte(`{}`)); err != nil {
 		t.Fatal(err)
 	}
-	c.Pair(context.Background(), "ABCD-1234", "Laptop", "linux", "amd64", testSource, testServerID, false, testSign) // Antwort egal, nur der Header zählt
+	c.Pair(context.Background(), "ABCD-1234", "Laptop", "linux", "amd64", testSource, testServerID, false, testSign, PairPredecessor{}) // Antwort egal, nur der Header zählt
 	if ingestUA != "tokenlore/9.9.9" || pairUA != "tokenlore/9.9.9" {
 		t.Errorf("User-Agent: ingest %q, pair %q", ingestUA, pairUA)
 	}
@@ -914,7 +914,7 @@ func TestOldDatabase(t *testing.T) {
 	}
 	_, err := newClient(t, statusServer(t, root, 503, nil, body).URL, root, 5*time.Second).Info(context.Background())
 	check("Info", err, msg)
-	_, err = newClient(t, pairServer(t, root, 503, body, nil).URL, root, 5*time.Second).Pair(context.Background(), "c", "n", "linux", "amd64", testSource, testServerID, false, testSign)
+	_, err = newClient(t, pairServer(t, root, 503, body, nil).URL, root, 5*time.Second).Pair(context.Background(), "c", "n", "linux", "amd64", testSource, testServerID, false, testSign, PairPredecessor{})
 	check("Pair", err, msg)
 	_, err = newClient(t, statusServer(t, root, 503, nil, body).URL, root, 5*time.Second).Ingest(context.Background(), testKey, []byte(`{}`))
 	check("Ingest", err, msg)

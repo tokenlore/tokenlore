@@ -23,6 +23,6 @@
     ]
   },
   "modules": [
-    "./email.ts"
+    "./register.ts"
   ]
 }

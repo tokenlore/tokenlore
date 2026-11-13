@@ -250,6 +250,15 @@ func DeviceSource(id, serverID string) string {
 	return hex.EncodeToString(m.Sum(nil))
 }
 
+// PredecessorSource ist die Kennung des Rechners, von dem dieser Konfigurationsordner stammt, für einen Server
+// (predecessor_source): dieselbe Rechnung wie DeviceSource mit der Kennung aus predecessor. Ohne Vorgänger leer.
+func PredecessorSource(id state.Identity, serverID string) string {
+	if id.Predecessor == "" {
+		return ""
+	}
+	return DeviceSource(id.Predecessor, serverID)
+}
+
 // IdentityCheck ist das Ergebnis von CheckIdentity.
 type IdentityCheck struct {
 	Current state.Identity // gültige Kennung dieses Ordners: die Datei, sonst die Kopie im Merkzettel

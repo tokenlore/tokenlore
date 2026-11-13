@@ -20,7 +20,7 @@ Bitte vor dem Koppeln lesen. Die Feldliste mit allen Grenzen steht in [`PROTOCOL
 - Pro Anfrage dazu die Signatur dieser Zeile (siehe unten).
 - Pro Sitzung: Sitzungs-ID, Claude-Code-Version, Konto-ID, abgeleitet aus den Anfragen.
 - Pro Gerät: der Gerätename, den du beim Koppeln vergibst, Betriebssystem, Architektur, Zeitzone, Plugin-Version.
-- Beim Koppeln: die Plugin-Version, der öffentliche Signaturschlüssel dieses Rechners mit einem Besitznachweis (seine Signatur über die Server-Kennung und den Kopplungscode; sie zeigt, dass der Rechner den privaten Schlüssel hat, und verrät ihn nicht), die öffentlichen Teile früherer Signaturschlüssel und `device_source`, die Kennung dieses Rechners für genau diesen Server. `device_source` ist ein HMAC-SHA256 der Server-Kennung (`server_id`, die der Server vor dem Koppeln nennt) mit der Kennung aus `tokenlore-id` als Schlüssel. Jeder Server bekommt eine andere, aus ihr lässt sich die Kennung nicht zurückrechnen, und ein Umzug des Servers auf eine neue Adresse ändert sie nicht.
+- Beim Koppeln: die Plugin-Version, der öffentliche Signaturschlüssel dieses Rechners mit einem Besitznachweis (seine Signatur über die Server-Kennung und den Kopplungscode; sie zeigt, dass der Rechner den privaten Schlüssel hat, und verrät ihn nicht), die öffentlichen Teile früherer Signaturschlüssel und `device_source`, die Kennung dieses Rechners für genau diesen Server. `device_source` ist ein HMAC-SHA256 der Server-Kennung (`server_id`, die der Server vor dem Koppeln nennt) mit der Kennung aus `tokenlore-id` als Schlüssel. Jeder Server bekommt eine andere, aus ihr lässt sich die Kennung nicht zurückrechnen, und ein Umzug des Servers auf eine neue Adresse ändert sie nicht. Stammt der Konfigurationsordner von einem anderen Rechner, dazu `predecessor_source`: dieselbe Rechnung mit der Kennung jenes Rechners, damit der Server ihn unter deinen Geräten erkennt (siehe [Kopierter Konfigurationsordner](#kopierter-konfigurationsordner)); nur an Server, die das kennen.
 - Vorgeschichte: die Tageswerte aus `stats-cache.json` (Datum, Tokens je Modell, Nachrichten, Sitzungen, Werkzeugaufrufe und das Datum, bis zu dem Claude Code die Datei fertig gerechnet hat), nur für Tage ohne einzelne Anfragen in den Sitzungsdateien. Das Plugin übernimmt sie einmal ins Archiv, signiert wie die Anfragen.
 
 **Was das Gerät nie Richtung tokenlore-Server verlässt:** Nachrichteninhalte, Werkzeug-Eingaben und -Ausgaben, Dateipfade, Projektnamen, eine Projekt-Kennung, Git-Zweige, Arbeitsordner, der Name aus dem Claude-Konto, der private Signaturschlüssel. Warnungen des Plugins (sie können Pfade und Projektordner enthalten) gehen nie an den Server.
@@ -29,7 +29,7 @@ Bitte vor dem Koppeln lesen. Die Feldliste mit allen Grenzen steht in [`PROTOCOL
 
 **Signatur:** Jede Zeile im Archiv trägt eine Ed25519-Signatur mit dem Signaturschlüssel dieses Rechners. Der Server nimmt nur Zeilen an, deren Signatur zu einem Schlüssel passt, den dieses Gerät beim Koppeln gemeldet hat, und speichert die Signatur mit. Eine kopierte oder nachträglich geänderte Zeile kommt so nicht an. Der private Schlüssel bleibt auf dem Rechner (siehe [Ablage und Schlüssel](#ablage-und-schlüssel)). Wer an deinem Rechner deinen Schlüssel auslesen kann, kann damit auch eigene Zeilen signieren: Die Signatur schützt vor Kopien und Versehen, nicht vor Absicht.
 
-**Was Claude mitliest:** Die Ausgabe eines `/tokenlore:…`-Befehls landet in Claudes Kontext. `/tokenlore:email` nennt dort deshalb nie eine Adresse; das Auswahlfenster des Befehls liest Claude nicht. `/tokenlore:status` zeigt deshalb nur die Anzahl der Warnungen. `/tokenlore:status --warnings` zeigt die Texte (Claude liest dann die Pfade mit), `/tokenlore:status --next` das ganze nächste Paket (Claude liest dann Konto-IDs, Werkzeugnamen und die Adressen nach der E-Mail-Stufe mit).
+**Was Claude mitliest:** Die Ausgabe eines `/tokenlore:…`-Befehls zeigt das Plugin selbst; Claude schreibt sie nicht ab, sie bleibt aber im Gespräch und landet so mit deiner nächsten Nachricht in Claudes Kontext. `/tokenlore:email` nennt dort deshalb nie eine Adresse; das Auswahlfenster des Befehls liest Claude nicht. `/tokenlore:status` zeigt deshalb nur die Anzahl der Warnungen. `/tokenlore:status --warnings` zeigt die Texte (Claude liest dann die Pfade mit), `/tokenlore:status --next` das ganze nächste Paket (Claude liest dann Konto-IDs, Werkzeugnamen und die Adressen nach der E-Mail-Stufe mit).
 
 **Werkzeugnamen:** Sie werden voll gesendet, auch die von MCP-Servern (`mcp__<server>__<werkzeug>`). Der Servername kann einen Firmen- oder Kundennamen enthalten. Wenn dich das stört, nutze solche Server nicht auf gekoppelten Geräten oder koppele nicht.
 
@@ -131,7 +131,7 @@ Was sich in jeder Version ändert, steht in [CHANGELOG.md](CHANGELOG.md).
 
 | Befehl | Wirkung |
 |---|---|
-| `/tokenlore:connect <https://server> <code> [--ca <fingerabdruck>] [--name <gerätename>]` | Gerät koppeln oder neu koppeln; ein [kopierter Ordner](#kopierter-konfigurationsordner) wird dabei ein eigenes Gerät |
+| `/tokenlore:connect <https://server> <code> [--ca <fingerabdruck>] [--name <gerätename>] [--vorgaenger gleich\|neu\|spaeter]` | Gerät koppeln oder neu koppeln; bei einem [kopierten Ordner](#kopierter-konfigurationsordner) fragt es, ob dieser Rechner das alte Gerät ist, `--vorgaenger` beantwortet die Frage im Voraus |
 | `/tokenlore:sync` | sofort abgleichen |
 | `/tokenlore:status [--next] [--warnings]` | Verbindung und Abgleich zeigen, mit `--next` das nächste Paket, mit `--warnings` die Texte der Warnungen |
 | `/tokenlore:email [off\|short\|full]` | E-Mail-Stufe wählen (Auswahlfenster) oder setzen |
@@ -190,8 +190,9 @@ Ein Rechner bleibt auf jedem Server ein Gerät, egal ob du es sperrst, neu koppe
 - **Server zieht um:** Erkannt wird der Server an seiner Kennung (`server_id`), nicht an seiner Adresse. Zieht er mit seiner Datenbank auf eine neue Adresse um, koppelst du mit der neuen Adresse neu und bleibst dasselbe Gerät.
 - **Anderer Server:** Auf einem anderen Server wird der Rechner ein eigenes Gerät dort. Der Signaturschlüssel bleibt; frühere Signaturschlüssel gehen beim Koppeln mit, damit der Server auch ältere Zeilen prüfen kann.
 - **Nach jedem Koppeln:** Das ganze Archiv mit der Vorgeschichte aus `stats-cache.json` geht noch einmal an den Server, auf jedem Server, jede Zeile einmal. Was der Server schon hat, lässt er unverändert. So kommt alles überall vollständig an und zählt nie doppelt, auch nicht nach mehrfachem Koppeln.
-- **Zusammenlegen:** Zeigen zwei Geräte auf dem Server dieselben abgeschlossenen Tage, ist es wahrscheinlich derselbe Rechner. Die Webseite fragt dann „Zusammenlegen?“; zusammengelegt wird nur nach deiner Bestätigung. Danach liefert das Plugin ohne neue Kopplung weiter.
-- **Anderer Rechner:** Ein anderer Rechner ist immer ein eigenes Gerät, auch beim Wechsel auf einen neuen Rechner; der Server zählt beide zusammen. Das alte Gerät sperrst du auf der Webseite.
+- **Zusammenlegen:** Zeigen zwei Geräte auf dem Server dieselben abgeschlossenen Tage, ist es wahrscheinlich derselbe Rechner. Die Webseite fragt dann „Zusammenlegen?“; zusammengelegt wird nur nach deiner Bestätigung. Danach liefert das Plugin ohne neue Kopplung weiter. Hast du bei der Frage nach dem Vorgänger „Nein“ gewählt, schlägt die Webseite diese beiden Geräte nie zum Zusammenlegen vor.
+- **Rechner neu aufgesetzt:** Holst du `~/.claude` aus einer Sicherung auf den neu aufgesetzten Rechner, fragt `/tokenlore:connect`, ob dies das alte Gerät ist. Mit „Ja“ bleibt es ein Gerät mit allen Zahlen (siehe [Kopierter Konfigurationsordner](#kopierter-konfigurationsordner)).
+- **Anderer Rechner:** Ein anderer Rechner ist ein eigenes Gerät, auch beim Wechsel auf einen neuen Rechner; der Server zählt beide zusammen. Das alte Gerät sperrst du auf der Webseite. Hast du `~/.claude` auf den neuen Rechner kopiert, fragt `/tokenlore:connect` nach; wähle dann „Nein“, wenn der alte Rechner weiterläuft.
 - **Prüfung vor jedem Liefern:** Vor jedem Abgleich vergleicht das Plugin die Kennungsdatei mit der Kopplung und die Systemkennung mit der in der Kennungsdatei. Passt eins nicht, liefert es nichts und meldet es (siehe [Meldungen](#meldungen)). Geklonte virtuelle Maschinen oder Container mit derselben Systemkennung erkennt die Prüfung nicht.
 
 ### Die Kennungsdatei
@@ -202,7 +203,7 @@ Ein Rechner bleibt auf jedem Server ein Gerät, egal ob du es sperrst, neu koppe
 |---|---|
 | `id` | Die Kennung dieses Ordners: 32 Hex-Zeichen. Das Plugin leitet sie aus `machine` und dem echten Pfad des Ordners ab, mit aufgelösten Symlinks (HMAC-SHA256 mit festem Schlüssel); ist die Systemkennung nicht lesbar, ist sie zufällig. Eine vorhandene Kennung bleibt, wie sie ist, auch eine zufällige. Aus ihr und der Server-Kennung (`server_id`) berechnet das Plugin `device_source`. |
 | `machine` | Prüfsumme (HMAC-SHA256 mit festem Schlüssel) der Systemkennung dieses Rechners (Linux `/etc/machine-id`, macOS die Hardware-UUID, Windows die `MachineGuid`). Daran erkennt das Plugin, ob der Ordner von einem anderen Rechner kopiert wurde. Leer, wenn die Systemkennung nicht lesbar ist. |
-| `predecessor` | Bei einem kopierten Ordner die Kennung des Rechners, von dem er stammt; sonst leer. |
+| `predecessor` | Bei einem kopierten Ordner die Kennung des Rechners, von dem er stammt; sonst leer. Daraus berechnet das Plugin beim Koppeln `predecessor_source` (siehe [Kopierter Konfigurationsordner](#kopierter-konfigurationsordner)). |
 
 Eine Kopie der Datei steht im Merkzettel `state.json`. Fehlt die Datei oder ist sie unlesbar, stellt `/tokenlore:connect` sie aus der Kopie wieder her. Weichen Datei und Kopie voneinander ab, gilt die Datei. Fehlt die Kopie auch (etwa weil du Datei und Datenverzeichnis gelöscht hast), leitet `/tokenlore:connect` die Kennung wieder aus der Systemkennung ab: Derselbe Ordner auf demselben Rechner bekommt dieselbe Kennung und bleibt auf dem Server dasselbe Gerät, auch wenn du ihn über einen Symlink erreichst. Der Ordner eines anderen Benutzers desselben Rechners bleibt ein eigenes Gerät.
 
@@ -210,7 +211,37 @@ Ist die Datei unlesbar, bleibt sie als `tokenlore-id.kaputt` daneben liegen. Nur
 
 ### Kopierter Konfigurationsordner
 
-Stammt die Kennungsdatei von einem anderen Rechner (du hast `~/.claude` kopiert oder aus einer Sicherung geholt), liefert das Plugin nichts, bis du neu koppelst. `/tokenlore:connect` macht diesen Rechner dann ohne Rückfrage zu einem eigenen Gerät: Er bekommt eine neue Kennung; die, von der er stammt, steht als `predecessor` in der Datei. Er bekommt ein eigenes Archiv; das Archiv des ursprünglichen Rechners liefert er nie. Anfragen, die schon der ursprüngliche Rechner geliefert hat, zählt der Server nicht doppelt, und Vorgeschichte-Tage mit genau denselben Zahlen weist er ab. Der ursprüngliche Rechner liefert unverändert weiter, solange der Datenordner nicht mitkopiert wurde.
+Stammt die Kennungsdatei von einem anderen Rechner (du hast `~/.claude` kopiert oder aus einer Sicherung geholt), liefert das Plugin nichts, bis du neu koppelst. Beim Koppeln bekommt der Ordner eine neue Kennung; die, von der er stammt, steht als `predecessor` in der Datei. Er bekommt ein eigenes Archiv; das Archiv des ursprünglichen Rechners liefert er nie.
+
+**Die Frage beim Koppeln:** Gehört der ursprüngliche Rechner auf dem Server zu deinen Geräten, fragt `/tokenlore:connect` in Claude Code in einem Auswahlfenster, ob dieser Rechner das alte Gerät ist. Die Frage ist kurz: Sie nennt das alte Gerät mit Namen und seine letzte Lieferung; ein anderes Betriebssystem und den Signaturschlüssel des alten Geräts nur, wenn das zutrifft. Jede Antwort sagt in einem Halbsatz, was danach passiert, und die empfohlene steht zuerst:
+
+- Hat das alte Gerät in den letzten 24 Stunden geliefert, scheint es in Gebrauch zu sein. Die Frage warnt davor und empfiehlt „Nein“.
+- Sonst empfiehlt sie „Ja“, etwa nach einem neu aufgesetzten Rechner.
+
+Entscheiden musst du; das Plugin und der Server entscheiden nie allein. Die drei Antworten und ihre Folgen genauer (im Fenster steht der Name des alten Geräts, hier „Laptop“):
+
+| Antwort | Was danach passiert |
+|---|---|
+| „Ja: dieser Rechner wird „Laptop“ …“ | Dieser Rechner koppelt das alte Gerät neu und bleibt ein Gerät mit allen Zahlen. Vorgeschichte-Tage dieses Ordners zählen nicht zusätzlich zu Tagen, an denen das alte Gerät Anfragen geliefert hat. Ein anderer Rechner, der als dieses Gerät liefert, liefert danach nicht mehr („Dieses Gerät wurde anderswo neu gekoppelt …“), bis du ihn neu koppelst. |
+| „Nein: eigenes Gerät …“ | Dieser Rechner wird ein eigenes Gerät, das alte liefert unverändert weiter. Die Frage kommt für diese beiden Geräte nie wieder, weder in Claude Code noch auf der Webseite. Anfragen, die schon der ursprüngliche Rechner geliefert hat, zählt der Server nicht doppelt, und Vorgeschichte-Tage mit genau denselben Zahlen weist er ab; Tage mit abweichenden Zahlen können doppelt zählen. |
+| „Später: eigenes Gerät, auf der Webseite entscheiden“ | Dieser Rechner wird ein eigenes Gerät und liefert. Die Webseite zeigt die Frage unter „Geräte“; „Ja“ dort legt beide Geräte zusammen und wirkt wie „Ja“ hier, „Nein“ wie „Nein“ hier. |
+
+Überspringst du das Fenster oder tippst eine eigene Antwort, koppelt das Plugin nicht. Der Code bleibt bis zu seinem Ablauf gültig (10 Minuten nach dem Erzeugen auf der Webseite), und die Meldung nennt die drei fertigen Befehle. Die Antwort lässt sich auch direkt mitgeben, etwa wenn kein Auswahlfenster erscheint; das Plugin druckt die Frage dann als Text mit denselben Befehlen:
+
+```
+/tokenlore:connect https://tokenlore.example.org 123456 --vorgaenger gleich
+/tokenlore:connect https://tokenlore.example.org 123456 --vorgaenger neu
+/tokenlore:connect https://tokenlore.example.org 123456 --vorgaenger spaeter
+```
+
+`gleich` heißt „Ja“, `neu` heißt „Nein“, `spaeter` (auch `später`) heißt „Später“. Steht keine Frage an, übergeht der Server die Antwort und koppelt wie ohne sie.
+
+Keine Frage kommt in diesen Fällen; gekoppelt wird dann wie ohne kopierten Ordner:
+
+- Der ursprüngliche Rechner gehört auf diesem Server nicht zu deinen Geräten (er gehört einem anderen Benutzer, wurde gelöscht oder war dort nie gekoppelt). Dieser Rechner wird ein eigenes Gerät. Zeigen beide Geräte dieselben abgeschlossenen Tage, schlägt die Webseite das Zusammenlegen vor.
+- Der Kopplungscode gilt für ein bestimmtes Gerät. Dann koppelt er genau dieses Gerät neu.
+- Der Server kennt diesen Rechner schon, etwa nach einer früheren Antwort. Dann koppelt er dasselbe Gerät neu.
+- Der Server kennt die Frage nicht. Dieser Rechner wird ein eigenes Gerät, und die Webseite schlägt das Zusammenlegen vor wie im ersten Fall.
 
 Lag darin auch `sign.key`, übernimmt der neue Rechner beim Koppeln diesen Signaturschlüssel: Der ursprüngliche meldet dann „Der Server kennt den Signaturschlüssel dieses Geräts nicht mehr …“ und holt ihn mit erneutem Koppeln zurück, worauf der andere ihn verliert. Hat der ursprüngliche Rechner danach auch `sign.key` verloren, bekommt er beim Koppeln einen neuen Schlüssel und liefert neue Anfragen weiter; ältere Zeilen mit dem übernommenen Schlüssel gehen nicht mit (Hinweis „… ältere Archivzeilen gehen nicht an den Server …“). Ist das andere Gerät derselbe Rechner, lege beide auf der Webseite unter „Geräte“ zusammen und kopple danach neu; dann gehen die älteren Zeilen mit. Kopiere den Datenordner deshalb nicht auf einen anderen Rechner. <!-- doku-ok: Wortlaut der Meldung -->
 

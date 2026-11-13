@@ -1,6 +1,6 @@
 ---
 description: Koppelt dieses Gerät mit deinem tokenlore-Server
-argument-hint: "<https://server> <code> [--ca <fingerabdruck>] [--name <gerätename>]"
+argument-hint: "<https://server> <code> [--ca <fingerabdruck>] [--name <gerätename>] [--vorgaenger gleich|neu|spaeter]"
 allowed-tools: Bash(sh "${CLAUDE_PLUGIN_ROOT}/bin/tokenlore" connect:*)
 disable-model-invocation: true
 ---

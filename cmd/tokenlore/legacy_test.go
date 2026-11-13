@@ -268,7 +268,7 @@ func TestOtherMachineDeliversNothing(t *testing.T) {
 
 	// Die kopierte Verbindung gehört dem ursprünglichen Rechner: connect fordert nicht auf, dessen Gerät zu sperren.
 	o := mustConnect(t, cfg, data, f)
-	if !strings.Contains(o, "dieser Rechner wird ein eigenes Gerät") || !strings.Contains(o, "gehörte zu einer anderen Kennung") ||
+	if !strings.Contains(o, "dieser Rechner bekommt eine eigene Kennung") || !strings.Contains(o, "gehörte zu einer anderen Kennung") ||
 		strings.Contains(o, "bis du es dort sperrst") {
 		t.Fatalf("Ausgabe:\n%s", o)
 	}

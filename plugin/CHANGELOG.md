@@ -4,6 +4,14 @@ Was sich am Plugin für dich ändert. Format nach [Keep a Changelog](https://kee
 
 ## Unveröffentlicht
 
+## 0.8.0 – 2026-11-13
+
+### Neu
+
+- Stammt dein Konfigurationsordner von einem anderen Rechner (etwa aus einer Sicherung), fragt `/tokenlore:connect` in einem Auswahlfenster, ob dieser Rechner das alte Gerät ist: Ja, Nein oder Später, mit Empfehlung und den Folgen je Antwort. Ohne Fenster nennt der Befehl die Frage als Text; antworten kannst du dann mit `--vorgaenger gleich`, `--vorgaenger neu` oder `--vorgaenger spaeter`. Ohne Antwort wird nicht gekoppelt.
+- Die Frage ist kurz: zwei Zeilen, und jede Antwort sagt in einem Halbsatz, was passiert, etwa „Ja: dieser Rechner wird „Laptop““. Die empfohlene Antwort steht zuerst. Nach deiner Wahl wiederholt die Meldung deine Antwort.
+- `/tokenlore:status`, `/tokenlore:sync`, `/tokenlore:disconnect` und `/tokenlore:email` mit Stufe zeigen ihre Ausgabe direkt. Claude schreibt sie nicht mehr ab; das spart Tokens und geht schneller.
+
 ## 0.7.0 – 2026-11-11
 
 ### Neu

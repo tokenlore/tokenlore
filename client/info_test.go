@@ -86,7 +86,7 @@ func TestOutdated(t *testing.T) {
 	for body, want := range cases {
 		srv := statusServer(t, root, 426, nil, body)
 		c := newClient(t, srv.URL, root, 5*time.Second)
-		_, err := c.Pair(context.Background(), "123456", "n", "linux", "amd64", testSource, testServerID, false, testSign)
+		_, err := c.Pair(context.Background(), "123456", "n", "linux", "amd64", testSource, testServerID, false, testSign, PairPredecessor{})
 		var oe *OutdatedError
 		if !errors.As(err, &oe) || oe.Min != want {
 			t.Errorf("Pair %s: %#v", body, err)

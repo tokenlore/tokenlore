@@ -242,7 +242,7 @@ func TestConnectOtherMachineBecomesOwnDevice(t *testing.T) {
 	setMachine(t, machineB)
 	f := newFakeServer(t)
 	out := mustConnect(t, cfg, data, f)
-	if !strings.Contains(out, "dieser Rechner wird ein eigenes Gerät") || strings.Contains(out, "Rückfrage") {
+	if !strings.Contains(out, "dieser Rechner bekommt eine eigene Kennung") || strings.Contains(out, "Rückfrage") {
 		t.Fatalf("Ausgabe:\n%s", out)
 	}
 	got := identityFile(t, cfg)

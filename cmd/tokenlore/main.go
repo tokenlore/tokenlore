@@ -21,8 +21,8 @@ var version = "dev"
 const usage = `Aufruf: tokenlore <befehl>
 
 Befehle:
-  connect <url> <code> [--ca <fingerabdruck>] [--name <name>]
-                  koppelt dieses Gerät mit dem Server
+  connect <url> <code> [--ca <fingerabdruck>] [--name <name>] [--vorgaenger gleich|neu|spaeter] [--frage-json]
+                  koppelt dieses Gerät mit dem Server; Exit 3: Der Server fragt nach dem Vorgänger
   disconnect      trennt die Verbindung (Gerät danach auf dem Server sperren)
   sync            gleicht jetzt mit dem Server ab
   status [--next] [--warnings]

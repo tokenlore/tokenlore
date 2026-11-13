@@ -1,8 +1,9 @@
 import type { Register } from 'claude-code'
+import { handled, runDirect } from './direct.ts'
 
 // Auswahlfenster für /tokenlore:email ohne Argument. Das Fenster öffnet Claude Code selbst, ohne dass Claude es
 // liest; deshalb darf es die Adresse zeigen. Die Textausgabe des Befehls liest Claude mit: Sie nennt nur die Stufe.
-// Mit Argument (off|short|full) läuft der Befehl wie ohne dieses Modul.
+// Mit Argument (off|short|full) ruft das Modul `email <stufe>` selbst und zeigt die Ausgabe (direct.ts).
 
 type Choice = {
   mode: string
@@ -34,7 +35,7 @@ export function levelOf(c: Choice, answer: string): (typeof LEVELS)[number] | un
 export const register: Register = on => {
   on('command.run', { command: 'tokenlore:email' }, async ($, e, next) => {
     if (e.args.trim() !== '') {
-      return next(e)
+      return handled(e.args) ? runDirect($, 'email', e.args) : next(e)
     }
     const bin = `${$.plugin.root}/bin/tokenlore`
     let c: Choice

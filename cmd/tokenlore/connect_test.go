@@ -50,8 +50,11 @@ type fakeServer struct {
 	signRefused []string // sign_keys_refused der Pair-Antwort
 	// verifySign: /ingest prüft wie der Server jede Signatur gegen die Schlüssel aus dem letzten Pair-Aufruf ohne
 	// signRefused und weist sonst mit 400 und reason sign_key_unknown ab.
-	verifySign  bool
-	pairBodies  []string
+	verifySign bool
+	pairBodies []string
+	features   []string // features der Info-Antwort; nil = Feld fehlt
+	// question: 409-Rumpf für jede Kopplung ohne predecessor_answer (Frage nach dem Vorgänger); leer = nie fragen.
+	question    string
 	noCA        bool   // /api/plugin/ca antwortet 404 (Server ohne eigene CA)
 	ingestCode  int    // 0 = 200
 	ingestBody  string // Rumpf zu ingestCode, z. B. der Grund eines 401
@@ -82,7 +85,11 @@ func newFakeServerHost(t *testing.T, host string) *fakeServer {
 			io.WriteString(w, f.infoBody)
 			return
 		}
-		json.NewEncoder(w).Encode(map[string]any{"server_id": f.serverID, "min_plugin_version": "0.1.0"})
+		info := map[string]any{"server_id": f.serverID, "min_plugin_version": "0.1.0"}
+		if f.features != nil {
+			info["features"] = f.features
+		}
+		json.NewEncoder(w).Encode(info)
 	})
 	mux.HandleFunc("/api/plugin/ca", func(w http.ResponseWriter, r *http.Request) {
 		f.caCalls.Add(1)
@@ -108,6 +115,11 @@ func newFakeServerHost(t *testing.T, host string) *fakeServer {
 		if f.pairCode != 0 {
 			w.WriteHeader(f.pairCode)
 			io.WriteString(w, f.pairBody)
+			return
+		}
+		if f.question != "" && !strings.Contains(string(body), `"predecessor_answer"`) {
+			w.WriteHeader(http.StatusConflict)
+			io.WriteString(w, f.question)
 			return
 		}
 		// Besitznachweis wie der Server: Signatur über Vorsatz, server_id und Code mit dem gemeldeten Schlüssel, sonst 400.
