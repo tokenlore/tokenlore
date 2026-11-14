@@ -1,5 +1,5 @@
 import type { Register } from 'claude-code'
-import { firstLine, handled, runDirect } from './direct.ts'
+import { firstLine, handled, runDirect, shMissing } from './direct.ts'
 
 // Auswahlfenster für /tokenlore:email ohne Argument. Das Fenster öffnet Claude Code selbst, ohne dass Claude es
 // liest; deshalb darf es die Adresse zeigen. Die Textausgabe des Befehls liest Claude mit: Sie nennt nur die Stufe.
@@ -67,7 +67,7 @@ export async function chooseLevel($: any): Promise<{ text: string } | undefined>
   const failure = await $.process
     .run(['sh', bin, 'email', level.mode])
     .then((r: any) => (r.exitCode === 0 ? '' : firstLine(r)))
-    .catch(() => 'tokenlore ließ sich nicht starten.')
+    .catch(async () => ((await shMissing($)) ? 'sh ließ sich nicht starten.' : 'tokenlore lief nicht zu Ende.'))
   if (failure !== '') {
     return { text: `✗ Nicht gespeichert, die Stufe bleibt ${current}. ${failure}`.trim() }
   }
@@ -78,7 +78,7 @@ export async function chooseLevel($: any): Promise<{ text: string } | undefined>
 export const register: Register = on => {
   on('command.run', { command: 'tokenlore:email' }, async ($, e, next) => {
     if (e.args.trim() !== '') {
-      return handled(e.args) ? runDirect($, 'email', e.args) : next(e)
+      return (handled(e.args) && (await runDirect($, 'email', e.args))) || next(e)
     }
     return (await chooseLevel($)) ?? next(e)
   }).catch(($, e, next) => next(e)) // Fehler im Modul: der Befehl läuft wie ohne Auswahlfenster

@@ -79,6 +79,9 @@ export async function update($: any): Promise<{ text: string }> {
 export const register: Register = on => {
   on('command.run', { command: 'tokenlore:menu' }, async ($, e, next) => {
     const status = await runDirect($, 'status', '')
+    if (!status) {
+      return next(e) // sh startet nicht: menu.md zeigt den Status über die Shell von Claude Code
+    }
     let answer: string
     try {
       answer = await $.ui.ask(`tokenlore: ${summary(status.text)} Was möchtest du tun?`, {

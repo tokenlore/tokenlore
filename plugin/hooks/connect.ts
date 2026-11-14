@@ -1,4 +1,5 @@
 import type { Register } from 'claude-code'
+import { shMissing } from './direct.ts'
 
 // Auswahlfenster für die Frage nach dem Vorgänger bei /tokenlore:connect. Stammt dieser Konfigurationsordner von
 // einem Gerät desselben Benutzers, fragt der Server, ob dieser Rechner das alte Gerät ist. Das Modul ruft
@@ -24,7 +25,7 @@ const EXIT_QUESTION = 3
 const TIMEOUT_MS = 10 * 60 * 1000
 
 const NOT_FINISHED =
-  'tokenlore lief nicht zu Ende (nicht gestartet oder nach 10 Minuten abgebrochen). Ob dieser Rechner gekoppelt ist, zeigt /tokenlore:status.'
+  'tokenlore lief nicht zu Ende (nach 10 Minuten abgebrochen). Ob dieser Rechner gekoppelt ist, zeigt /tokenlore:status.'
 
 // handled meldet, ob das Modul den Aufruf übernimmt: nicht ohne Argumente, nicht mit --vorgaenger oder --frage-json
 // (die Antwort steht schon fest oder jemand will das JSON selbst sehen) und nicht mit einem einfachen
@@ -55,8 +56,9 @@ export const register: Register = on => {
     try {
       first = await connect('--frage-json')
     } catch {
-      // Nicht next(e): Hat connect schon gekoppelt, wäre der Code verbraucht und ein zweiter Lauf scheiterte.
-      return { text: NOT_FINISHED }
+      // Startet sh nicht, lief connect nicht: Die Befehlsdatei koppelt. Sonst nicht next(e): Hat connect schon
+      // gekoppelt, wäre der Code verbraucht und ein zweiter Lauf scheiterte.
+      return (await shMissing($)) ? next(e) : { text: NOT_FINISHED }
     }
     if (first.exitCode !== EXIT_QUESTION) {
       return { text: output(first) }

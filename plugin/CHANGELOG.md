@@ -4,6 +4,12 @@ Was sich am Plugin für dich ändert. Format nach [Keep a Changelog](https://kee
 
 ## Unveröffentlicht
 
+## 0.9.2 – 2026-11-14
+
+### Behoben
+
+- Unter Windows meldeten `/tokenlore:status`, `/tokenlore:sync`, `/tokenlore:disconnect`, `/tokenlore:email`, `/tokenlore:connect` und `/tokenlore:menu` sofort „tokenlore lief nicht zu Ende“, wenn `sh` nicht im PATH liegt (`where sh` findet nichts). Sie laufen dann wieder über ihre Befehlsdatei; Claude gibt die Ausgabe wieder wie vor 0.9.0.
+
 ## 0.9.1 – 2026-11-13
 
 ### Geändert
